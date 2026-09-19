@@ -32,7 +32,8 @@ data:
   sample_rate_out: 24000
   min_audio_seconds: 0.5
   max_audio_seconds: 20.0
-  extraction_batch_size: 16
+  extraction_batch_size: 32
+  extraction_num_workers: 8 # bump toward Colab's CPU core count if it has more
 
 train:
   output_dir: runs/ctc_base

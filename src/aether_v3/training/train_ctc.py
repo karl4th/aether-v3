@@ -41,6 +41,20 @@ from aether_v3.training.scheduler import build_scheduler
 logger = logging.getLogger(__name__)
 
 
+def _amp_autocast(device: torch.device, dtype: torch.dtype):
+    """Autocast context, or a no-op on non-accelerator devices.
+
+    Measured empirically: bf16 autocast on an Apple Silicon CPU backend ran
+    ~100-1000x slower per step than plain fp32 (most CPU kernels have no
+    optimized bf16 path and fall back to a slow reference implementation).
+    Autocast is a GPU tensor-core optimization; forcing it on CPU is a
+    pessimization, not "extra safety margin", so it's skipped there.
+    """
+    if device.type == "cuda":
+        return torch.autocast(device_type="cuda", dtype=dtype)
+    return contextlib.nullcontext()
+
+
 class JsonlLogger:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -113,7 +127,7 @@ def evaluate(
     n_batches = 0
     for batch in loader:
         batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-        with torch.autocast(device_type=device.type, dtype=amp_dtype):
+        with _amp_autocast(device, amp_dtype):
             log_probs = model(batch["semantic_codes"], batch["attention_mask"])
             loss = compute_ctc_loss(
                 log_probs, batch["targets"], batch["input_lengths"], batch["target_lengths"], blank_id
@@ -234,7 +248,7 @@ def run_training(config: ExperimentConfig) -> None:
                 else model.no_sync()
             )
             with sync_ctx:
-                with torch.autocast(device_type=device.type, dtype=amp_dtype):
+                with _amp_autocast(device, amp_dtype):
                     log_probs = model(batch["semantic_codes"], batch["attention_mask"])
                     loss = compute_ctc_loss(
                         log_probs,

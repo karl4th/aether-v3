@@ -35,6 +35,7 @@ data:
   min_audio_seconds: 0.1
   max_audio_seconds: 30.0
   extraction_batch_size: 8
+  extraction_num_workers: 0 # dataset is 73 examples, not worth process overhead
 
 train:
   output_dir: runs/ctc_dummy

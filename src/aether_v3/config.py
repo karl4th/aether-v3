@@ -57,7 +57,10 @@ class DataConfig:
     sample_rate_out: int = 24000
     min_audio_seconds: float = 0.5
     max_audio_seconds: float = 20.0
-    extraction_batch_size: int = 16
+    extraction_batch_size: int = 32
+    # Parallel CPU workers decoding/resampling audio during extraction, so
+    # decode overlaps with Mimi's GPU encode instead of blocking it.
+    extraction_num_workers: int = 4
 
 
 @dataclasses.dataclass

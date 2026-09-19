@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Iterator
 
 import numpy as np
+import torch.utils.data
 from datasets import Dataset
 
 from aether_v3.config import DataConfig, ExperimentConfig, MimiConfig
@@ -22,6 +23,36 @@ from aether_v3.data.tokenizer import text_to_byte_ids
 from aether_v3.models.mimi_wrapper import FrozenMimi
 
 logger = logging.getLogger(__name__)
+
+
+class _RawAudioDataset(torch.utils.data.Dataset):
+    """Thin torch Dataset over a raw (undedecoded-until-accessed) HF split.
+
+    Exists so audio decode/resample (CPU-bound: FLAC decode via
+    soundfile/librosa) can run in `DataLoader` worker processes, overlapping
+    with Mimi's GPU encode in the main process instead of blocking it -
+    without this, extraction was measured at ~13 examples/sec on a Colab GPU
+    session because decode ran serially before every GPU call.
+    """
+
+    def __init__(self, raw: Dataset, sample_rate_in: int, role: str) -> None:
+        self.raw = raw
+        self.sample_rate_in = sample_rate_in
+        self.role = role
+
+    def __len__(self) -> int:
+        return len(self.raw)
+
+    def __getitem__(self, idx: int) -> tuple[np.ndarray, str]:
+        row = self.raw[idx]
+        audio = row["audio"]
+        sr = audio["sampling_rate"]
+        if sr != self.sample_rate_in:
+            raise ValueError(
+                f"Unexpected sample rate {sr} Hz for {self.role} split "
+                f"(configured sample_rate_in={self.sample_rate_in})."
+            )
+        return np.asarray(audio["array"], dtype=np.float32), row["text"]
 
 
 def _ctc_min_input_length(target_ids: list[int]) -> int:
@@ -61,21 +92,20 @@ def _extract_generator(
     n_dropped_duration = 0
     n_ctc_infeasible = 0
     n_yielded = 0
-    for start in range(0, n_total, data_cfg.extraction_batch_size):
-        end = min(start + data_cfg.extraction_batch_size, n_total)
-        chunk = raw[start:end]
 
+    raw_loader = torch.utils.data.DataLoader(
+        _RawAudioDataset(raw, data_cfg.sample_rate_in, role),
+        batch_size=data_cfg.extraction_batch_size,
+        shuffle=False,
+        num_workers=data_cfg.extraction_num_workers,
+        collate_fn=list,
+        prefetch_factor=4 if data_cfg.extraction_num_workers > 0 else None,
+    )
+    for batch in raw_loader:
         waveforms: list[np.ndarray] = []
         texts: list[str] = []
-        for audio, text in zip(chunk["audio"], chunk["text"]):
-            wav = np.asarray(audio["array"], dtype=np.float32)
-            sr = audio["sampling_rate"]
-            if sr != data_cfg.sample_rate_in:
-                raise ValueError(
-                    f"Unexpected sample rate {sr} Hz for {role} split "
-                    f"(configured sample_rate_in={data_cfg.sample_rate_in})."
-                )
-            duration = len(wav) / sr
+        for wav, text in batch:
+            duration = len(wav) / data_cfg.sample_rate_in
             if not (data_cfg.min_audio_seconds <= duration <= data_cfg.max_audio_seconds):
                 n_dropped_duration += 1
                 continue
