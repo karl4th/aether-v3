@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 import torch.utils.data
+import torchaudio
 from datasets import Dataset
 
 from aether_v3.config import DataConfig, ExperimentConfig, MimiConfig
@@ -29,16 +30,21 @@ logger = logging.getLogger(__name__)
 class _RawAudioDataset(torch.utils.data.Dataset):
     """Thin torch Dataset over a raw (undedecoded-until-accessed) HF split.
 
-    Exists so audio decode/resample (CPU-bound: FLAC decode via
-    soundfile/librosa) can run in `DataLoader` worker processes, overlapping
-    with Mimi's GPU encode in the main process instead of blocking it -
-    without this, extraction was measured at ~13 examples/sec on a Colab GPU
-    session because decode ran serially before every GPU call.
+    Exists so audio decode+resample (CPU-bound: FLAC decode via
+    soundfile/librosa, then resampling to Mimi's target rate) can run in
+    `DataLoader` worker processes, overlapping with Mimi's GPU encode in the
+    main process instead of blocking it - without this, extraction was
+    measured at ~13 examples/sec on a Colab GPU session because decode ran
+    serially before every GPU call. Resample in particular used to happen
+    in `FrozenMimi.encode_semantic` itself (main process, one waveform at a
+    time, ahead of every batch's GPU call) - moved here so it's parallel
+    across workers instead of serially stalling the GPU each batch.
     """
 
-    def __init__(self, raw: Dataset, sample_rate_in: int, role: str) -> None:
+    def __init__(self, raw: Dataset, sample_rate_in: int, target_sample_rate: int, role: str) -> None:
         self.raw = raw
         self.sample_rate_in = sample_rate_in
+        self.target_sample_rate = target_sample_rate
         self.role = role
 
     def __len__(self) -> int:
@@ -53,7 +59,12 @@ class _RawAudioDataset(torch.utils.data.Dataset):
                 f"Unexpected sample rate {sr} Hz for {self.role} split "
                 f"(configured sample_rate_in={self.sample_rate_in})."
             )
-        return np.asarray(audio["array"], dtype=np.float32), row["text"]
+        waveform = np.asarray(audio["array"], dtype=np.float32)
+        if self.sample_rate_in != self.target_sample_rate:
+            waveform = torchaudio.functional.resample(
+                torch.from_numpy(waveform), self.sample_rate_in, self.target_sample_rate
+            ).numpy()
+        return waveform, row["text"]
 
 
 def _ctc_min_input_length(target_ids: list[int]) -> int:
@@ -96,7 +107,7 @@ def _extract_generator(
     n_yielded = 0
 
     raw_loader = torch.utils.data.DataLoader(
-        _RawAudioDataset(raw, data_cfg.sample_rate_in, role),
+        _RawAudioDataset(raw, data_cfg.sample_rate_in, mimi.target_sample_rate, role),
         batch_size=data_cfg.extraction_batch_size,
         shuffle=False,
         num_workers=data_cfg.extraction_num_workers,
@@ -107,7 +118,10 @@ def _extract_generator(
         waveforms: list[np.ndarray] = []
         texts: list[str] = []
         for wav, text in batch:
-            duration = len(wav) / data_cfg.sample_rate_in
+            # wav is already resampled to mimi.target_sample_rate by
+            # _RawAudioDataset - length must be measured against that rate,
+            # not the source sample_rate_in.
+            duration = len(wav) / mimi.target_sample_rate
             if not (data_cfg.min_audio_seconds <= duration <= data_cfg.max_audio_seconds):
                 n_dropped_duration += 1
                 continue
@@ -117,7 +131,7 @@ def _extract_generator(
         if not waveforms:
             continue
 
-        code_seqs = mimi.encode_semantic(waveforms, orig_sample_rate=data_cfg.sample_rate_in)
+        code_seqs = mimi.encode_semantic(waveforms)
         for codes, text in zip(code_seqs, texts, strict=True):
             byte_target = text_to_byte_ids(text)
             # CTC requires input_length >= target_length (+ separators for

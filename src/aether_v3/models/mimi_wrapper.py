@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import numpy as np
 import torch
-import torchaudio
 from transformers import AutoFeatureExtractor, MimiModel
 
 
@@ -48,24 +47,15 @@ class FrozenMimi:
         self.device = torch.device(device)
         self.target_sample_rate: int = self.feature_extractor.sampling_rate
 
-    def _resample(self, waveform: np.ndarray, orig_sample_rate: int) -> np.ndarray:
-        if orig_sample_rate == self.target_sample_rate:
-            return np.asarray(waveform, dtype=np.float32)
-        tensor = torch.from_numpy(np.asarray(waveform, dtype=np.float32))
-        resampled = torchaudio.functional.resample(
-            tensor, orig_sample_rate, self.target_sample_rate
-        )
-        return resampled.numpy()
-
     @torch.no_grad()
-    def encode_semantic(
-        self, waveforms: list[np.ndarray], orig_sample_rate: int
-    ) -> list[np.ndarray]:
+    def encode_semantic(self, waveforms: list[np.ndarray]) -> list[np.ndarray]:
         """Encode a batch of mono float32 waveforms into semantic code id sequences.
 
         Args:
-            waveforms: list of 1D float32 arrays at `orig_sample_rate`.
-            orig_sample_rate: sample rate of every array in `waveforms`.
+            waveforms: list of 1D float32 arrays already at `target_sample_rate`
+                (resampling is the caller's job - see `_RawAudioDataset` in
+                `mimi_cache.py`, where it's done in parallel `DataLoader`
+                workers instead of serially here, blocking the GPU).
 
         Returns:
             list of 1D int32 arrays (one per input), each containing the
@@ -74,10 +64,9 @@ class FrozenMimi:
         """
         if not waveforms:
             return []
-        resampled = [self._resample(w, orig_sample_rate) for w in waveforms]
 
         inputs = self.feature_extractor(
-            raw_audio=resampled,
+            raw_audio=waveforms,
             sampling_rate=self.target_sample_rate,
             padding=True,
             return_tensors="pt",

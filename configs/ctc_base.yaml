@@ -43,7 +43,9 @@ data:
   sample_rate_out: 24000
   min_audio_seconds: 0.5
   max_audio_seconds: 20.0
-  extraction_batch_size: 32
+  # Mimi is small (frozen, semantic-codebook-only) - 32 was conservative for
+  # a T4's 16GB. Bump further if VRAM allows; drop it back down on an OOM.
+  extraction_batch_size: 64
   extraction_num_workers: 8 # bump toward Colab's CPU core count if it has more
 
 train:
