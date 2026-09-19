@@ -12,7 +12,7 @@ import torch
 
 
 def collate_ctc_batch(batch: list[tuple[torch.Tensor, torch.Tensor]]) -> dict[str, torch.Tensor]:
-    codes_list, target_list = zip(*batch)
+    codes_list, target_list = zip(*batch, strict=True)
 
     input_lengths = torch.tensor([c.numel() for c in codes_list], dtype=torch.long)
     target_lengths = torch.tensor([t.numel() for t in target_list], dtype=torch.long)

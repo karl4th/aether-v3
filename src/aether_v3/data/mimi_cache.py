@@ -10,8 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import numpy as np
 import torch.utils.data
@@ -64,7 +64,8 @@ def _ctc_min_input_length(target_ids: list[int]) -> int:
     """
     if not target_ids:
         return 0
-    repeats = sum(1 for a, b in zip(target_ids, target_ids[1:]) if a == b)
+    # Deliberately mismatched lengths (adjacent-pair iteration).
+    repeats = sum(1 for a, b in zip(target_ids, target_ids[1:], strict=False) if a == b)
     return len(target_ids) + repeats
 
 
@@ -116,7 +117,7 @@ def _extract_generator(
             continue
 
         code_seqs = mimi.encode_semantic(waveforms, orig_sample_rate=data_cfg.sample_rate_in)
-        for codes, text in zip(code_seqs, texts):
+        for codes, text in zip(code_seqs, texts, strict=True):
             byte_target = text_to_byte_ids(text)
             # CTC requires input_length >= target_length (+ separators for
             # adjacent repeated labels); at Mimi's 12.5Hz semantic frame rate,
