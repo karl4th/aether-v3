@@ -43,9 +43,11 @@ data:
   sample_rate_out: 24000
   min_audio_seconds: 0.5
   max_audio_seconds: 20.0
-  # Mimi is small (frozen, semantic-codebook-only) - 32 was conservative for
-  # a T4's 16GB. Bump further if VRAM allows; drop it back down on an OOM.
-  extraction_batch_size: 64
+  # 64 OOM'd on a T4 (14.56GB) once a batch happened to include several
+  # near-max-length (20s) clips - back to the known-safe value. Don't bump
+  # this again without also capping how long the longest clip in a batch
+  # can be, or padding to the batch max can blow past VRAM unpredictably.
+  extraction_batch_size: 32
   extraction_num_workers: 8 # bump toward Colab's CPU core count if it has more
 
 train:
