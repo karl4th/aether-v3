@@ -43,12 +43,11 @@ data:
   sample_rate_out: 24000
   min_audio_seconds: 0.5
   max_audio_seconds: 20.0
-  # 64 OOM'd on a T4 (14.56GB) once a batch happened to include several
-  # near-max-length (20s) clips. Dropped further to 16 for headroom - the
-  # second OOM at 32 was actually stale GPU memory from the first crash
-  # (Jupyter kept the failed run's model alive via the exception traceback),
-  # not proof 32 itself is too big, but 16 leaves more margin either way.
-  extraction_batch_size: 16
+  # 64 OOM'd on a T4 (14.56GB, ~19.6GB+ peak needed) - fine on an A100
+  # (40/80GB) with plenty of headroom. Drop back to 16 if running on a T4
+  # again (see _encode_with_oom_retry in mimi_cache.py for the safety net
+  # either way - halves a batch and retries once on a genuine CUDA OOM).
+  extraction_batch_size: 64
   extraction_num_workers: 8 # bump toward Colab's CPU core count if it has more
 
 train:
