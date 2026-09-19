@@ -1,0 +1,60 @@
+# Tiny smoke-test config: hf-internal-testing/librispeech_asr_dummy (a
+# handful of utterances) instead of full LibriSpeech, and a short training
+# run. Used to validate the whole pipeline end-to-end (resample -> Mimi
+# encode -> byte-encode -> cache -> train -> decode) before committing to a
+# real LibriSpeech download/run. Not meant to produce a usable model.
+
+mimi:
+  pretrained_id: kyutai/mimi
+  sampling_rate: 24000
+  num_quantizers: 1
+
+aether_speech:
+  semantic_vocab_size: 2048
+  hidden_size: 768
+  num_layers: 8
+  num_heads: 12
+  ffn_size: 3072
+  dropout: 0.1
+  rope_theta: 10000.0
+  max_position_embeddings: 4096
+
+ctc:
+  vocab_size: 257
+  blank_id: 256
+
+data:
+  dataset_id: hf-internal-testing/librispeech_asr_dummy
+  fallback_dataset_id: null
+  train_splits: ["clean/validation"]
+  validation_splits: ["clean/validation"]
+  test_splits: ["clean/validation"]
+  cache_dir: data_cache/ctc_dummy
+  sample_rate_in: 16000
+  sample_rate_out: 24000
+  min_audio_seconds: 0.1
+  max_audio_seconds: 30.0
+  extraction_batch_size: 8
+  num_proc: 1
+
+train:
+  output_dir: runs/ctc_dummy
+  batch_size: 4
+  grad_accum_steps: 1
+  max_steps: 300
+  warmup_steps: 20
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.98
+  grad_clip_norm: 1.0
+  eval_interval: 50
+  eval_max_batches: 20
+  save_interval: 300
+  log_interval: 10
+  num_workers: 0
+  seed: 1337
+  amp_dtype: bfloat16
+  wandb_project: null
+  resume_from: null

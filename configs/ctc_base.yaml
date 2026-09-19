@@ -1,0 +1,58 @@
+# AETHER STT v0.1 — phase 1 (CTC branch only) base experiment config.
+# Every field here has a dataclass default in src/aether_v3/config.py;
+# this file exists so it's easy to see/edit without reading the code.
+
+mimi:
+  pretrained_id: kyutai/mimi
+  sampling_rate: 24000
+  num_quantizers: 1 # semantic codebook only (index 0 of 32)
+
+aether_speech:
+  semantic_vocab_size: 2048
+  hidden_size: 768
+  num_layers: 8
+  num_heads: 12
+  ffn_size: 3072
+  dropout: 0.1
+  rope_theta: 10000.0
+  max_position_embeddings: 4096
+
+ctc:
+  vocab_size: 257 # 256 UTF-8 byte values + 1 blank
+  blank_id: 256
+
+data:
+  dataset_id: openslr/librispeech_asr
+  fallback_dataset_id: distil-whisper/librispeech_asr
+  train_splits: ["clean/train.100", "clean/train.360"]
+  validation_splits: ["clean/validation.clean", "other/validation.other"]
+  test_splits: ["clean/test.clean", "other/test.other"]
+  cache_dir: data_cache/ctc_base
+  sample_rate_in: 16000
+  sample_rate_out: 24000
+  min_audio_seconds: 0.5
+  max_audio_seconds: 20.0
+  extraction_batch_size: 16
+  num_proc: 4
+
+train:
+  output_dir: runs/ctc_base
+  batch_size: 32
+  grad_accum_steps: 1
+  max_steps: 200000
+  warmup_steps: 2000
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.98
+  grad_clip_norm: 1.0
+  eval_interval: 2000
+  eval_max_batches: 200
+  save_interval: 2000
+  log_interval: 50
+  num_workers: 4
+  seed: 1337
+  amp_dtype: bfloat16
+  wandb_project: null
+  resume_from: null
