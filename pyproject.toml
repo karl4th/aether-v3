@@ -10,9 +10,13 @@ requires-python = ">=3.12"
 dependencies = [
     "torch>=2.4",
     "torchaudio>=2.4",
-    "transformers>=4.53",
-    "datasets>=2.19",
+    "transformers>=5.17",
+    # <4.0: 4.0+ requires torchcodec (and its own ffmpeg shared libs) to
+    # decode the Audio feature; pinning below that keeps decoding on
+    # soundfile so this doesn't need a system ffmpeg install anywhere.
+    "datasets>=2.19,<4.0",
     "soundfile>=0.12",
+    "librosa>=0.10",
     "jiwer>=3.0",
     "pyyaml>=6.0",
     "numpy>=1.26",

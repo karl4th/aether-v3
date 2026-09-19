@@ -58,7 +58,6 @@ class DataConfig:
     min_audio_seconds: float = 0.5
     max_audio_seconds: float = 20.0
     extraction_batch_size: int = 16
-    num_proc: int = 4
 
 
 @dataclasses.dataclass
@@ -75,7 +74,6 @@ class TrainConfig:
     adam_beta2: float = 0.98
     grad_clip_norm: float = 1.0
     eval_interval: int = 2000
-    eval_max_batches: int = 200
     save_interval: int = 2000
     log_interval: int = 50
     num_workers: int = 4

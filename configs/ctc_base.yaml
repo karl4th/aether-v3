@@ -33,7 +33,6 @@ data:
   min_audio_seconds: 0.5
   max_audio_seconds: 20.0
   extraction_batch_size: 16
-  num_proc: 4
 
 train:
   output_dir: runs/ctc_base
@@ -48,7 +47,6 @@ train:
   adam_beta2: 0.98
   grad_clip_norm: 1.0
   eval_interval: 2000
-  eval_max_batches: 200
   save_interval: 2000
   log_interval: 50
   num_workers: 4

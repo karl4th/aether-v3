@@ -97,16 +97,21 @@ def evaluate(
     device: torch.device,
     amp_dtype: torch.dtype,
     blank_id: int,
-    max_batches: int,
 ) -> dict:
+    """Evaluates on every example in `loader` - no batch cap.
+
+    A fixed-prefix cap (e.g. "first N batches") would evaluate the same
+    non-random subset every time (this loader is never shuffled), silently
+    biasing both the reported WER/CER and which checkpoint gets saved as
+    "best". The configured validation splits are a few thousand utterances
+    total, cheap enough to score in full each time.
+    """
     model.eval()
     all_refs: list[str] = []
     all_hyps: list[str] = []
     total_loss = 0.0
     n_batches = 0
-    for i, batch in enumerate(loader):
-        if i >= max_batches:
-            break
+    for batch in loader:
         batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
         with torch.autocast(device_type=device.type, dtype=amp_dtype):
             log_probs = model(batch["semantic_codes"], batch["attention_mask"])
@@ -267,9 +272,7 @@ def run_training(config: ExperimentConfig) -> None:
             t0 = time.time()
 
         if step % config.train.eval_interval == 0:
-            metrics = evaluate(
-                model, val_loader, device, amp_dtype, blank_id, config.train.eval_max_batches
-            )
+            metrics = evaluate(model, val_loader, device, amp_dtype, blank_id)
             if is_main_process():
                 logger.info(
                     "eval @ step %d | loss %.4f | wer %.4f | cer %.4f",
