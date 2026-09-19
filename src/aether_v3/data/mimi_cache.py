@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import time
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -134,6 +135,21 @@ def _extract_generator(
     n_dropped_duration = 0
     n_ctc_infeasible = 0
     n_yielded = 0
+    n_consumed = 0
+
+    # `datasets`' own progress bar for this generator can't show a total
+    # (Dataset.from_generator doesn't know the split size ahead of time,
+    # hence the "N/0" it prints) - log our own, since `n_total` is known
+    # here, roughly every 2% of the split so it doesn't spam small splits.
+    log_every = max(1, n_total // 50)
+    t_start = time.time()
+    logger.info(
+        "%s: starting extraction of %d examples (batch_size=%d, num_workers=%d)",
+        role,
+        n_total,
+        data_cfg.extraction_batch_size,
+        data_cfg.extraction_num_workers,
+    )
 
     raw_loader = torch.utils.data.DataLoader(
         _RawAudioDataset(raw, data_cfg.sample_rate_in, mimi.target_sample_rate, role),
@@ -156,6 +172,22 @@ def _extract_generator(
                 continue
             waveforms.append(wav)
             texts.append(text)
+
+        n_consumed += len(batch)
+        if n_consumed % log_every < len(batch):
+            elapsed = time.time() - t_start
+            rate = n_consumed / elapsed if elapsed > 0 else 0.0
+            remaining = (n_total - n_consumed) / rate if rate > 0 else float("inf")
+            logger.info(
+                "%s: %d/%d (%.1f%%) - %.0fs elapsed, ~%.0fs remaining (%.1f examples/s)",
+                role,
+                n_consumed,
+                n_total,
+                100.0 * n_consumed / n_total,
+                elapsed,
+                remaining,
+                rate,
+            )
 
         if not waveforms:
             continue
