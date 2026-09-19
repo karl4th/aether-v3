@@ -47,12 +47,10 @@ class DataConfig:
     train_splits: list[str] = dataclasses.field(
         default_factory=lambda: ["clean/train.100", "clean/train.360"]
     )
-    validation_splits: list[str] = dataclasses.field(
-        default_factory=lambda: ["clean/validation.clean", "other/validation.other"]
-    )
-    test_splits: list[str] = dataclasses.field(
-        default_factory=lambda: ["clean/test.clean", "other/test.other"]
-    )
+    # clean-only deliberately - see the comment in configs/ctc_base.yaml on
+    # why "other/validation"/"other/test" are costly to include.
+    validation_splits: list[str] = dataclasses.field(default_factory=lambda: ["clean/validation"])
+    test_splits: list[str] = dataclasses.field(default_factory=lambda: ["clean/test"])
     cache_dir: str = "data_cache/ctc_base"
     sample_rate_in: int = 16000
     sample_rate_out: int = 24000

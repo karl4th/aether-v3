@@ -71,20 +71,28 @@ Checkpoints, a `config.yaml` snapshot, and a `log.jsonl` land in
 CER are logged every `eval_interval` steps. Set `train.wandb_project` to also
 log to Weights & Biases (optional dependency).
 
-## Colab: cross-session caching via Drive
+## Colab: two notebooks, cross-session caching via Drive
 
 `prepare_cache` downloads ~30GB of raw LibriSpeech audio, but the extracted
 result it actually needs to keep (semantic codes + byte targets) is only
-~100-150MB. `notebooks/train_ctc.ipynb` mounts Google Drive and, around the
-`prepare_cache` call, mirrors just that small extracted cache with
-`aether_v3.data.cache_sync` — so a fresh Colab session restores it in
-seconds instead of redownloading and re-extracting from scratch. Training
-checkpoints/logs (`train.output_dir`) are pointed at Drive directly, and the
-notebook auto-resumes from the last checkpoint there if one exists, so a
-dropped session doesn't lose the compute units already spent.
+~100-150MB, and extraction is CPU-decode-bound - it doesn't benefit from a
+strong GPU. So the notebook workflow is split in two:
 
-Extraction doesn't need a strong GPU (Mimi is small) — the notebook flags
-where a T4 runtime is enough, reserving stronger GPU tiers for training.
+- `notebooks/prepare_data.ipynb` — run once on a cheap **T4** runtime.
+  Downloads LibriSpeech, runs `prepare_cache`, and mirrors just the small
+  extracted cache (not the raw audio) to Google Drive via
+  `aether_v3.data.cache_sync`.
+- `notebooks/train_ctc.ipynb` — run on a stronger GPU (A100/L4). Restores
+  that cache from Drive in seconds (raises with a clear message if it's
+  missing, rather than silently re-extracting on the expensive tier) and
+  trains. Checkpoints/logs (`train.output_dir`) are written straight to
+  Drive, and training auto-resumes from the last checkpoint there if one
+  exists, so a dropped session doesn't lose the compute units already
+  spent.
+
+Re-running `prepare_data.ipynb` is only needed if `configs/ctc_base.yaml`'s
+data settings change - a mismatched fingerprint makes `prepare_cache` raise
+rather than silently reusing a stale cache.
 
 ## Layout
 
