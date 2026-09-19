@@ -67,6 +67,35 @@ class _RawAudioDataset(torch.utils.data.Dataset):
         return waveform, row["text"]
 
 
+def _encode_with_oom_retry(mimi: FrozenMimi, waveforms: list[np.ndarray]) -> list[np.ndarray]:
+    """`mimi.encode_semantic`, halving the batch and retrying on CUDA OOM.
+
+    A single unlucky batch (several near-`max_audio_seconds` clips padded
+    together) can exceed VRAM even when the configured batch size normally
+    fits comfortably. Without this, that one batch would crash the entire
+    `extract_split()` generator - and since `prepare_cache` only writes the
+    split to disk after it finishes completely, every example already
+    processed in this run would be lost too. Halving is a one-off recovery
+    for a rare bad batch, not a substitute for a sane `extraction_batch_size`.
+    """
+    try:
+        return mimi.encode_semantic(waveforms)
+    except torch.cuda.OutOfMemoryError:
+        if len(waveforms) == 1:
+            raise
+        torch.cuda.empty_cache()
+        mid = len(waveforms) // 2
+        logger.warning(
+            "CUDA OOM on a batch of %d waveforms - splitting into %d + %d and retrying.",
+            len(waveforms),
+            mid,
+            len(waveforms) - mid,
+        )
+        return _encode_with_oom_retry(mimi, waveforms[:mid]) + _encode_with_oom_retry(
+            mimi, waveforms[mid:]
+        )
+
+
 def _ctc_min_input_length(target_ids: list[int]) -> int:
     """Minimum number of input frames CTC needs to align `target_ids`.
 
@@ -131,7 +160,7 @@ def _extract_generator(
         if not waveforms:
             continue
 
-        code_seqs = mimi.encode_semantic(waveforms)
+        code_seqs = _encode_with_oom_retry(mimi, waveforms)
         for codes, text in zip(code_seqs, texts, strict=True):
             byte_target = text_to_byte_ids(text)
             # CTC requires input_length >= target_length (+ separators for
