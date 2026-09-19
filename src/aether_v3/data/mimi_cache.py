@@ -237,6 +237,35 @@ def _extract_generator(
         )
 
 
+def _role_to_specs(config: ExperimentConfig) -> dict[str, list[str]]:
+    return {
+        "train": config.data.train_splits,
+        "validation": config.data.validation_splits,
+        "test": config.data.test_splits,
+    }
+
+
+def download_raw_splits(config: ExperimentConfig) -> None:
+    """Downloads and builds every configured LibriSpeech split via HF `datasets`,
+    without touching Mimi at all.
+
+    Meant to be run as its own step (its own notebook cell, ideally) ahead of
+    `prepare_cache`: HF's own download/build progress bars show a real total
+    (e.g. "28539/28539"), but the Mimi-extraction generator that follows
+    can't (`Dataset.from_generator` doesn't know a generator's length ahead
+    of time, hence the "N/0" progress it shows during that stage) - running
+    these as two separate calls makes it unambiguous which one is actually
+    in progress, instead of two different "N/..." bars that look identical
+    at a glance. `prepare_cache` calls `load_splits` again per role, but
+    once downloaded/built here, that's a instant local-cache hit, not a
+    second download.
+    """
+    for role, specs in _role_to_specs(config).items():
+        logger.info("Downloading '%s' split(s) %s ...", role, specs)
+        load_splits(specs, config.data.dataset_id, config.data.fallback_dataset_id)
+        logger.info("'%s' split(s) %s ready in the local HF datasets cache.", role, specs)
+
+
 def extract_split(
     specs: list[str],
     data_cfg: DataConfig,
@@ -293,11 +322,7 @@ def prepare_cache(config: ExperimentConfig, device: str = "cpu") -> dict[str, Pa
     cache_dir = Path(config.data.cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    role_to_specs = {
-        "train": config.data.train_splits,
-        "validation": config.data.validation_splits,
-        "test": config.data.test_splits,
-    }
+    role_to_specs = _role_to_specs(config)
     out_paths: dict[str, Path] = {}
     for role, specs in role_to_specs.items():
         out_path = cache_dir / role
