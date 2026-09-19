@@ -1,4 +1,5 @@
 """Greedy CTC decoding: argmax -> collapse repeats -> drop blank -> UTF-8 bytes."""
+
 from __future__ import annotations
 
 import torch

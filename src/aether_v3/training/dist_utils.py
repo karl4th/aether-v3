@@ -5,6 +5,7 @@ Detects `torchrun`'s environment variables (`WORLD_SIZE`, `RANK`,
 `python -m ...`), everything here is a no-op and training runs single
 process on one GPU (or CPU).
 """
+
 from __future__ import annotations
 
 import os

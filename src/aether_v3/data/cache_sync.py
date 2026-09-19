@@ -15,6 +15,7 @@ logic: `hydrate_from_remote` only fills in roles missing locally, and
 against the current config, so a stale remote cache is still caught -
 not silently trusted just because it came from Drive.
 """
+
 from __future__ import annotations
 
 import json

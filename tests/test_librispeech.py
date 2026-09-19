@@ -2,6 +2,7 @@
 `scripts/prepare_data.py` smoke test instead. Only the pure parsing logic is
 unit-tested here.
 """
+
 import pytest
 
 from aether_v3.data.librispeech import _parse_split_spec

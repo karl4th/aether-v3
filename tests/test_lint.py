@@ -6,6 +6,7 @@ Needs the `dev` dependency group: `uv sync --group dev`. Skips (rather than
 failing) if a tool isn't installed, so the rest of the suite still runs
 without it.
 """
+
 import subprocess
 import sys
 from pathlib import Path

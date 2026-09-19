@@ -5,6 +5,7 @@ RoPE layout) so `AetherSpeech`'s positional handling matches the LM it will
 eventually feed into (phase 2), even though phase 1 only trains the CTC
 branch.
 """
+
 from __future__ import annotations
 
 import torch

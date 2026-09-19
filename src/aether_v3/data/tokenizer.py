@@ -5,6 +5,7 @@ No vocabulary/BPE training needed: text is just its raw UTF-8 bytes (ids
 CTC head has vocab_size=257. This makes the CTC branch language-agnostic —
 any language expressible in UTF-8 works without touching this file.
 """
+
 from __future__ import annotations
 
 BLANK_ID = 256

@@ -21,6 +21,7 @@ Verified against `transformers` (kyutai/mimi, transformers 5.17):
   -frame ratio is not simply `sampling_rate / frame_rate` due to an internal
   causal-conv downsampling stage.
 """
+
 from __future__ import annotations
 
 import numpy as np
@@ -41,7 +42,7 @@ class FrozenMimi:
         self.model = MimiModel.from_pretrained(pretrained_id)
         self.model.eval()
         self.model.requires_grad_(False)
-        self.model.to(device)
+        self.model.to(device)  # type: ignore[arg-type]  # transformers' .to() stub mis-infers this overload
         self.feature_extractor = AutoFeatureExtractor.from_pretrained(pretrained_id)
         self.num_quantizers = num_quantizers
         self.device = torch.device(device)
@@ -51,7 +52,9 @@ class FrozenMimi:
         if orig_sample_rate == self.target_sample_rate:
             return np.asarray(waveform, dtype=np.float32)
         tensor = torch.from_numpy(np.asarray(waveform, dtype=np.float32))
-        resampled = torchaudio.functional.resample(tensor, orig_sample_rate, self.target_sample_rate)
+        resampled = torchaudio.functional.resample(
+            tensor, orig_sample_rate, self.target_sample_rate
+        )
         return resampled.numpy()
 
     @torch.no_grad()
@@ -83,8 +86,13 @@ class FrozenMimi:
         padding_mask = inputs["padding_mask"].to(self.device)
 
         outputs = self.model.encode(
-            input_values, padding_mask=padding_mask, num_quantizers=self.num_quantizers
+            input_values,
+            padding_mask=padding_mask,
+            num_quantizers=self.num_quantizers,
+            return_dict=True,
         )
+        assert not isinstance(outputs, tuple)  # return_dict=True rules out the tuple return path
+        assert outputs.audio_codes is not None  # always set when encode() is given input_values
         codes = outputs.audio_codes[:, 0, :]  # (batch, frames) - semantic codebook only
         frame_mask = self.model.get_audio_codes_mask(padding_mask)  # (batch, frames) bool
         lengths = frame_mask.sum(dim=-1).tolist()

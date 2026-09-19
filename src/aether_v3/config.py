@@ -4,6 +4,7 @@ Loaded from YAML (see configs/ctc_base.yaml) into plain dataclasses. Kept
 deliberately flat/non-nested-generic so it can be built with simple
 ``DataclassType(**raw_dict)`` calls without an extra dependency.
 """
+
 from __future__ import annotations
 
 import dataclasses

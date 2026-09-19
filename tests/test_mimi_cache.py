@@ -6,6 +6,7 @@ they're exercised by `scripts/prepare_data.py` against
 `configs/ctc_dummy.yaml` instead (an actual end-to-end smoke test), not
 here.
 """
+
 from aether_v3.config import DataConfig, MimiConfig
 from aether_v3.data.mimi_cache import _cache_fingerprint, _ctc_min_input_length
 

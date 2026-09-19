@@ -1,4 +1,5 @@
 """WER/CER via jiwer."""
+
 from __future__ import annotations
 
 import jiwer

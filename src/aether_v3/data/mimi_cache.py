@@ -5,6 +5,7 @@ so this module runs it once per split and writes the results to disk. This
 is meant to be invoked via `scripts/prepare_data.py`, not imported into the
 training loop.
 """
+
 from __future__ import annotations
 
 import hashlib

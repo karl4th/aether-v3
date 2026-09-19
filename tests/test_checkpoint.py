@@ -20,7 +20,7 @@ def test_save_and_load_roundtrip(tmp_path):
 
     assert ckpt["step"] == 42
     assert ckpt["best_cer"] == 0.5
-    for p1, p2 in zip(model.parameters(), new_model.parameters()):
+    for p1, p2 in zip(model.parameters(), new_model.parameters(), strict=True):
         assert torch.equal(p1, p2)
 
 
@@ -32,7 +32,7 @@ def test_load_without_optimizer_or_scheduler(tmp_path):
     new_model = torch.nn.Linear(4, 2)
     ckpt = load_checkpoint(path, new_model)
     assert ckpt["step"] == 1
-    for p1, p2 in zip(model.parameters(), new_model.parameters()):
+    for p1, p2 in zip(model.parameters(), new_model.parameters(), strict=True):
         assert torch.equal(p1, p2)
 
 

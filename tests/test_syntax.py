@@ -5,6 +5,7 @@ check used ad hoc during development - runs as an ordinary test now, with
 one parametrized case per file instead of one opaque pass/fail for the
 whole tree.
 """
+
 import ast
 from pathlib import Path
 
@@ -20,8 +21,6 @@ def _all_python_files() -> list[Path]:
     return sorted(files)
 
 
-@pytest.mark.parametrize(
-    "path", _all_python_files(), ids=lambda p: str(p.relative_to(REPO_ROOT))
-)
+@pytest.mark.parametrize("path", _all_python_files(), ids=lambda p: str(p.relative_to(REPO_ROOT)))
 def test_file_parses(path: Path) -> None:
     ast.parse(path.read_text(), filename=str(path))

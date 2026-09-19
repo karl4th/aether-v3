@@ -6,6 +6,7 @@ via `model(...)` — going through `DistributedDataParallel`'s `__call__` so
 its gradient-sync hooks actually fire — and then calls this function with
 plain tensors.
 """
+
 from __future__ import annotations
 
 import torch

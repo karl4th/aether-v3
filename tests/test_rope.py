@@ -42,4 +42,6 @@ def test_rotate_half_is_self_inverse_up_to_sign():
 
 def test_build_rope_cache_rejects_odd_head_dim():
     with pytest.raises(ValueError):
-        build_rope_cache(seq_len=4, head_dim=5, theta=10000.0, device=torch.device("cpu"), dtype=torch.float32)
+        build_rope_cache(
+            seq_len=4, head_dim=5, theta=10000.0, device=torch.device("cpu"), dtype=torch.float32
+        )

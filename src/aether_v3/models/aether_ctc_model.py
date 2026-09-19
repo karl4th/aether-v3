@@ -5,6 +5,7 @@ Qwen3-4B LM branch from the full architecture are not implemented here —
 that's phase 2, gated on this CTC branch reaching decent accuracy on its
 own.
 """
+
 from __future__ import annotations
 
 import torch

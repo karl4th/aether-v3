@@ -6,6 +6,7 @@ Runs correctly single-process on 1 GPU (`python -m aether_v3.training.train_ctc
 with no code changes — distributed-ness is detected from `torchrun`'s
 environment variables (see `dist_utils.py`).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -77,7 +78,7 @@ def build_dataloader(
     distributed: bool,
     drop_last: bool,
 ) -> tuple[DataLoader, DistributedSampler | None]:
-    sampler = None
+    sampler: DistributedSampler | None = None
     use_shuffle = shuffle
     if distributed:
         sampler = DistributedSampler(dataset, shuffle=shuffle)
@@ -130,7 +131,11 @@ def evaluate(
         with _amp_autocast(device, amp_dtype):
             log_probs = model(batch["semantic_codes"], batch["attention_mask"])
             loss = compute_ctc_loss(
-                log_probs, batch["targets"], batch["input_lengths"], batch["target_lengths"], blank_id
+                log_probs,
+                batch["targets"],
+                batch["input_lengths"],
+                batch["target_lengths"],
+                blank_id,
             )
         total_loss += loss.item()
         n_batches += 1
@@ -143,7 +148,7 @@ def evaluate(
         "loss": total_loss / max(1, n_batches),
         "wer": compute_wer(all_refs, all_hyps),
         "cer": compute_cer(all_refs, all_hyps),
-        "examples": list(zip(all_refs[:5], all_hyps[:5])),
+        "examples": list(zip(all_refs[:5], all_hyps[:5], strict=True)),
     }
 
 
@@ -242,11 +247,12 @@ def run_training(config: ExperimentConfig) -> None:
 
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
             is_last_micro_step = micro_step == config.train.grad_accum_steps - 1
-            sync_ctx = (
-                contextlib.nullcontext()
-                if (not distributed or is_last_micro_step)
-                else model.no_sync()
-            )
+            sync_ctx: contextlib.AbstractContextManager
+            if not distributed or is_last_micro_step:
+                sync_ctx = contextlib.nullcontext()
+            else:
+                assert isinstance(model, torch.nn.parallel.DistributedDataParallel)
+                sync_ctx = model.no_sync()
             with sync_ctx:
                 with _amp_autocast(device, amp_dtype):
                     log_probs = model(batch["semantic_codes"], batch["attention_mask"])
@@ -279,7 +285,8 @@ def run_training(config: ExperimentConfig) -> None:
                 elapsed,
                 config.train.log_interval,
             )
-            json_logger.log(step=step, loss=avg_loss, lr=lr)
+            if json_logger is not None:
+                json_logger.log(step=step, loss=avg_loss, lr=lr)
             if wandb_run:
                 wandb_run.log({"train/loss": avg_loss, "train/lr": lr}, step=step)
             running_loss = 0.0
@@ -298,12 +305,13 @@ def run_training(config: ExperimentConfig) -> None:
                 for ref, hyp in metrics["examples"]:
                     logger.info("  ref: %r", ref)
                     logger.info("  hyp: %r", hyp)
-                json_logger.log(
-                    step=step,
-                    eval_loss=metrics["loss"],
-                    eval_wer=metrics["wer"],
-                    eval_cer=metrics["cer"],
-                )
+                if json_logger is not None:
+                    json_logger.log(
+                        step=step,
+                        eval_loss=metrics["loss"],
+                        eval_wer=metrics["wer"],
+                        eval_cer=metrics["cer"],
+                    )
                 if wandb_run:
                     wandb_run.log(
                         {
@@ -315,14 +323,17 @@ def run_training(config: ExperimentConfig) -> None:
                     )
                 if metrics["cer"] < best_cer:
                     best_cer = metrics["cer"]
-                    save_checkpoint(output_dir / "best.pt", model, optimizer, scheduler, step, best_cer)
+                    save_checkpoint(
+                        output_dir / "best.pt", model, optimizer, scheduler, step, best_cer
+                    )
 
         if is_main_process() and step % config.train.save_interval == 0:
             save_checkpoint(output_dir / "last.pt", model, optimizer, scheduler, step, best_cer)
 
     if is_main_process():
         save_checkpoint(output_dir / "last.pt", model, optimizer, scheduler, step, best_cer)
-        json_logger.close()
+        if json_logger is not None:
+            json_logger.close()
     teardown_distributed()
 
 

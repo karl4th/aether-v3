@@ -65,7 +65,9 @@ def test_push_publishes_role_missing_from_remote(tmp_path):
 
     assert pushed == ["train"]
     assert (remote_dir / "train" / "payload.txt").read_text() == "data"
-    assert json.loads((remote_dir / "train.fingerprint.json").read_text())["fingerprint"] == "abc123"
+    assert (
+        json.loads((remote_dir / "train.fingerprint.json").read_text())["fingerprint"] == "abc123"
+    )
 
 
 def test_push_skips_role_already_matching_remote(tmp_path):

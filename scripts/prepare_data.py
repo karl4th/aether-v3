@@ -9,6 +9,7 @@ Also callable from a notebook:
     from aether_v3.data.mimi_cache import prepare_cache
     prepare_cache(load_config("configs/ctc_base.yaml"), device="cuda")
 """
+
 from __future__ import annotations
 
 import argparse

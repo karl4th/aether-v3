@@ -3,6 +3,7 @@
 8 blocks, dim 768, 12 heads, FFN 3072, pre-LN, GELU, RoPE (no causal mask —
 this encoder is bidirectional, unlike the downstream autoregressive LM).
 """
+
 from __future__ import annotations
 
 import torch

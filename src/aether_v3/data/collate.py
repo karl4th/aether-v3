@@ -6,6 +6,7 @@ value. Targets are returned CTC-ready: concatenated into one 1D tensor plus
 per-example lengths, matching `torch.nn.functional.ctc_loss`'s expected
 input shape.
 """
+
 from __future__ import annotations
 
 import torch
