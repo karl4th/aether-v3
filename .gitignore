@@ -9,7 +9,7 @@ __pycache__/
 # Environments
 .venv/
 venv/
-
+docs/*
 # Project data/artifacts - regenerated locally or on the training box, never
 # meant to be committed (cached Mimi extractions, checkpoints/logs, HF/W&B
 # state).
