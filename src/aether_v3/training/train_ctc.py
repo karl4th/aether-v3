@@ -14,6 +14,7 @@ import contextlib
 import dataclasses
 import json
 import logging
+import math
 import time
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from aether_v3.models.ctc_head import compute_ctc_loss
 from aether_v3.training.checkpoint import load_checkpoint, save_checkpoint
 from aether_v3.training.dist_utils import (
     get_rank,
+    get_world_size,
     is_distributed,
     is_main_process,
     setup_distributed,
@@ -40,6 +42,13 @@ from aether_v3.training.dist_utils import (
 from aether_v3.training.scheduler import build_scheduler
 
 logger = logging.getLogger(__name__)
+
+# Always log these absolute step numbers, regardless of `log_interval` - so
+# the very first log line lands quickly (proof the run isn't hung) instead
+# of only ever appearing every `log_interval` steps, which can look
+# indistinguishable from a frozen process on a slow first few steps (CUDA
+# kernel compilation, etc).
+_EARLY_LOG_STEPS = frozenset({1, 2, 5, 10, 20})
 
 
 def _amp_autocast(device: torch.device, dtype: torch.dtype):
@@ -54,6 +63,19 @@ def _amp_autocast(device: torch.device, dtype: torch.dtype):
     if device.type == "cuda":
         return torch.autocast(device_type="cuda", dtype=dtype)
     return contextlib.nullcontext()
+
+
+def _format_duration(seconds: float) -> str:
+    if not math.isfinite(seconds):
+        return "unknown"
+    total = int(seconds)
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h{m:02d}m"
+    if m:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
 
 
 class JsonlLogger:
@@ -232,7 +254,21 @@ def run_training(config: ExperimentConfig) -> None:
     data_iter = iter(train_loader)
     epoch = 0
     running_loss = 0.0
+    steps_since_log = 0
     t0 = time.time()
+
+    if is_main_process():
+        logger.info(
+            "Starting training from step %d/%d (batch_size=%d, grad_accum_steps=%d, "
+            "world_size=%d, device=%s) - first log line in ~%d step(s).",
+            step,
+            config.train.max_steps,
+            config.train.batch_size,
+            config.train.grad_accum_steps,
+            get_world_size(),
+            device,
+            min(config.train.log_interval, 10),
+        )
 
     while step < config.train.max_steps:
         for micro_step in range(config.train.grad_accum_steps):
@@ -272,27 +308,43 @@ def run_training(config: ExperimentConfig) -> None:
         scheduler.step()
         optimizer.zero_grad()
         step += 1
+        steps_since_log += 1
 
-        if is_main_process() and step % config.train.log_interval == 0:
+        should_log = step in _EARLY_LOG_STEPS or steps_since_log >= config.train.log_interval
+        if is_main_process() and should_log:
             elapsed = time.time() - t0
-            avg_loss = running_loss / config.train.log_interval
+            avg_loss = running_loss / steps_since_log
             lr = scheduler.get_last_lr()[0]
+            steps_per_sec = steps_since_log / elapsed if elapsed > 0 else 0.0
+            examples_per_sec = (
+                steps_per_sec * config.train.batch_size * config.train.grad_accum_steps * get_world_size()
+            )
+            eta_seconds = (
+                (config.train.max_steps - step) / steps_per_sec if steps_per_sec > 0 else float("inf")
+            )
             logger.info(
-                "step %d | loss %.4f | lr %.2e | %.2fs/%d-step",
+                "step %d/%d (%.1f%%) | loss %.4f | lr %.2e | %.2f steps/s, %.1f examples/s | "
+                "ETA %s",
                 step,
+                config.train.max_steps,
+                100.0 * step / config.train.max_steps,
                 avg_loss,
                 lr,
-                elapsed,
-                config.train.log_interval,
+                steps_per_sec,
+                examples_per_sec,
+                _format_duration(eta_seconds),
             )
             if json_logger is not None:
                 json_logger.log(step=step, loss=avg_loss, lr=lr)
             if wandb_run:
                 wandb_run.log({"train/loss": avg_loss, "train/lr": lr}, step=step)
             running_loss = 0.0
+            steps_since_log = 0
             t0 = time.time()
 
         if step % config.train.eval_interval == 0:
+            if is_main_process():
+                logger.info("step %d | running eval on the full validation set ...", step)
             metrics = evaluate(model, val_loader, device, amp_dtype, blank_id)
             if is_main_process():
                 logger.info(
