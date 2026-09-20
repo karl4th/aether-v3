@@ -5,20 +5,36 @@ from aether_v3.models.aether_ctc_model import AetherCTCModel
 from aether_v3.models.ctc_head import compute_ctc_loss
 
 
+def _tiny_ctc_cfg(**overrides) -> CTCConfig:
+    # upsampler_num_heads=2 to match the tiny hidden_size=8 speech config
+    # used in these tests (8 isn't divisible by the default 12 heads).
+    defaults = dict(
+        vocab_size=6,
+        blank_id=5,
+        upsample_factor=2,
+        upsampler_num_layers=1,
+        upsampler_num_heads=2,
+        upsampler_ffn_size=16,
+        upsampler_dropout=0.0,
+    )
+    defaults.update(overrides)
+    return CTCConfig(**defaults)
+
+
 def test_end_to_end_forward_and_backward():
     speech_cfg = AetherSpeechConfig(
         semantic_vocab_size=16, hidden_size=8, num_layers=2, num_heads=2, ffn_size=16, dropout=0.0
     )
-    ctc_cfg = CTCConfig(vocab_size=6, blank_id=5)
+    ctc_cfg = _tiny_ctc_cfg()
     model = AetherCTCModel(speech_cfg, ctc_cfg)
 
     codes = torch.randint(0, speech_cfg.semantic_vocab_size, (2, 12))
     mask = torch.ones(2, 12, dtype=torch.bool)
     log_probs = model(codes, mask)
-    assert log_probs.shape == (2, 12, ctc_cfg.vocab_size)
+    assert log_probs.shape == (2, 12 * ctc_cfg.upsample_factor, ctc_cfg.vocab_size)
 
     targets = torch.tensor([0, 1, 2, 3])
-    input_lengths = torch.tensor([12, 12])
+    input_lengths = torch.tensor([12, 12]) * ctc_cfg.upsample_factor
     target_lengths = torch.tensor([2, 2])
     loss = compute_ctc_loss(log_probs, targets, input_lengths, target_lengths, ctc_cfg.blank_id)
     loss.backward()

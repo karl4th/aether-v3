@@ -118,6 +118,7 @@ def _extract_generator(
     device: str,
     role: str,
     drop_ctc_infeasible: bool,
+    ctc_upsample_factor: int,
 ) -> Iterator[dict]:
     """Not called directly by `Dataset.from_generator` - see `extract_split`.
 
@@ -199,14 +200,20 @@ def _extract_generator(
             # adjacent repeated labels); at Mimi's 12.5Hz semantic frame rate,
             # average English text (~13-15 UTF-8 bytes/sec) is close to or
             # above that, a non-trivial fraction of examples can be
-            # structurally unalignable. `zero_infinity=True` in the CTC loss
-            # would otherwise silently zero these out (no gradient) rather
+            # structurally unalignable. `ctc_upsample_factor` scales up the
+            # available frame count here to match `CTCUpsampler`'s output
+            # rate (see aether_v3.models.ctc_upsampler) - without it, this
+            # check would be checking feasibility against a frame rate the
+            # model never actually sees at the CTC head, wrongly dropping
+            # examples that are perfectly alignable post-upsampling.
+            # `zero_infinity=True` in the CTC loss would otherwise silently
+            # zero out genuinely-infeasible examples (no gradient) rather
             # than erroring, so for `train` they're dropped here instead
             # (no point spending a batch slot on zero-gradient examples).
             # `validation`/`test` keep them - WER/CER must reflect real
             # performance on every utterance the model has to transcribe,
             # not just the CTC-alignable ones.
-            if _ctc_min_input_length(byte_target) > len(codes):
+            if _ctc_min_input_length(byte_target) > len(codes) * ctc_upsample_factor:
                 n_ctc_infeasible += 1
                 if drop_ctc_infeasible:
                     continue
@@ -228,11 +235,12 @@ def _extract_generator(
     if n_seen:
         logger.warning(
             "%s: %d/%d examples (%.1f%%) are CTC-infeasible (target needs more frames than "
-            "Mimi provides)%s.",
+            "Mimi provides at %dx upsampling)%s.",
             role,
             n_ctc_infeasible,
             n_seen,
             100.0 * n_ctc_infeasible / n_seen,
+            ctc_upsample_factor,
             " - dropped from the cache" if drop_ctc_infeasible else " - kept in the cache",
         )
 
@@ -273,6 +281,7 @@ def extract_split(
     device: str,
     role: str,
     drop_ctc_infeasible: bool,
+    ctc_upsample_factor: int,
 ) -> Dataset:
     """Load LibriSpeech split(s) `specs` and extract (semantic_codes, byte_target) pairs."""
     raw = load_splits(specs, data_cfg.dataset_id, data_cfg.fallback_dataset_id)
@@ -285,11 +294,14 @@ def extract_split(
             "device": device,
             "role": role,
             "drop_ctc_infeasible": drop_ctc_infeasible,
+            "ctc_upsample_factor": ctc_upsample_factor,
         },
     )
 
 
-def _cache_fingerprint(data_cfg: DataConfig, mimi_cfg: MimiConfig, specs: list[str]) -> str:
+def _cache_fingerprint(
+    data_cfg: DataConfig, mimi_cfg: MimiConfig, specs: list[str], ctc_upsample_factor: int
+) -> str:
     """Hash of every setting that changes what `extract_split` would produce.
 
     Used to detect a stale cache (e.g. after editing duration bounds or
@@ -305,6 +317,10 @@ def _cache_fingerprint(data_cfg: DataConfig, mimi_cfg: MimiConfig, specs: list[s
         "max_audio_seconds": data_cfg.max_audio_seconds,
         "mimi_pretrained_id": mimi_cfg.pretrained_id,
         "mimi_num_quantizers": mimi_cfg.num_quantizers,
+        # Changes which examples are feasible/kept for `train` (see the
+        # comment in `_extract_generator`) - a stale cache built with a
+        # different upsample factor must not be silently reused.
+        "ctc_upsample_factor": ctc_upsample_factor,
     }
     blob = json.dumps(payload, sort_keys=True).encode("utf-8")
     return hashlib.sha256(blob).hexdigest()[:16]
@@ -328,7 +344,7 @@ def prepare_cache(config: ExperimentConfig, device: str = "cpu") -> dict[str, Pa
         out_path = cache_dir / role
         fingerprint_path = cache_dir / f"{role}.fingerprint.json"
         out_paths[role] = out_path
-        current_fp = _cache_fingerprint(config.data, config.mimi, specs)
+        current_fp = _cache_fingerprint(config.data, config.mimi, specs, config.ctc.upsample_factor)
 
         if out_path.exists():
             stored_fp = None
@@ -346,7 +362,13 @@ def prepare_cache(config: ExperimentConfig, device: str = "cpu") -> dict[str, Pa
 
         logger.info("Extracting '%s' split(s) %s ...", role, specs)
         dataset = extract_split(
-            specs, config.data, config.mimi, device, role, drop_ctc_infeasible=(role == "train")
+            specs,
+            config.data,
+            config.mimi,
+            device,
+            role,
+            drop_ctc_infeasible=(role == "train"),
+            ctc_upsample_factor=config.ctc.upsample_factor,
         )
         dataset.save_to_disk(str(out_path))
         fingerprint_path.write_text(json.dumps({"fingerprint": current_fp, "specs": specs}))

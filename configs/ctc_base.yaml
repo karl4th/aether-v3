@@ -20,6 +20,19 @@ aether_speech:
 ctc:
   vocab_size: 257 # 256 UTF-8 byte values + 1 blank
   blank_id: 256
+  # 12.5Hz Mimi frames are below typical English byte-rate (~12-18
+  # bytes/sec) - measured on the real train cache, only ~15.7% of
+  # examples survived the CTC-feasibility filter at raw 12.5Hz, and even
+  # those sat right at the alignment ceiling (p95 required/available
+  # frame ratio ~1.0). upsample_factor=4 (-> 50Hz for the CTC branch only,
+  # AetherSpeechEncoder's own 12.5Hz output is untouched) gives enough
+  # headroom that nearly all examples become feasible again.
+  upsample_factor: 4
+  upsampler_num_layers: 2
+  upsampler_num_heads: 12
+  upsampler_ffn_size: 3072
+  upsampler_dropout: 0.1
+  upsampler_rope_theta: 10000.0
 
 data:
   dataset_id: openslr/librispeech_asr

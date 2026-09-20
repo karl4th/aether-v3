@@ -37,6 +37,7 @@ from aether_v3.training.dist_utils import (
     is_main_process,
     setup_distributed,
     teardown_distributed,
+    unwrap_model,
     wrap_model,
 )
 from aether_v3.training.scheduler import build_scheduler
@@ -144,24 +145,30 @@ def evaluate(
     total, cheap enough to score in full each time.
     """
     model.eval()
+    # input_lengths are computed at Mimi's raw 12.5Hz rate (see
+    # collate_ctc_batch); the model's CTC branch runs at
+    # upsample_factor-times that (see CTCUpsampler), so lengths must be
+    # scaled up to match before they're used for CTC loss/decoding.
+    upsample_factor = unwrap_model(model).upsample_factor
     all_refs: list[str] = []
     all_hyps: list[str] = []
     total_loss = 0.0
     n_batches = 0
     for batch in loader:
         batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
+        up_input_lengths = batch["input_lengths"] * upsample_factor
         with _amp_autocast(device, amp_dtype):
             log_probs = model(batch["semantic_codes"], batch["attention_mask"])
             loss = compute_ctc_loss(
                 log_probs,
                 batch["targets"],
-                batch["input_lengths"],
+                up_input_lengths,
                 batch["target_lengths"],
                 blank_id,
             )
         total_loss += loss.item()
         n_batches += 1
-        hyps = greedy_ctc_decode(log_probs.float().cpu(), batch["input_lengths"].cpu(), blank_id)
+        hyps = greedy_ctc_decode(log_probs.float().cpu(), up_input_lengths.cpu(), blank_id)
         refs = targets_to_texts(batch["targets"].cpu(), batch["target_lengths"].cpu())
         all_hyps.extend(hyps)
         all_refs.extend(refs)
@@ -206,6 +213,9 @@ def run_training(config: ExperimentConfig) -> None:
     )
 
     model: torch.nn.Module = AetherCTCModel(config.aether_speech, config.ctc)
+    # input_lengths (computed at Mimi's raw 12.5Hz rate) must be scaled to
+    # match the CTC branch's upsampled output rate - see CTCUpsampler.
+    ctc_upsample_factor = model.upsample_factor
     model = wrap_model(model, device)
 
     optimizer = torch.optim.AdamW(
@@ -295,7 +305,7 @@ def run_training(config: ExperimentConfig) -> None:
                     loss = compute_ctc_loss(
                         log_probs,
                         batch["targets"],
-                        batch["input_lengths"],
+                        batch["input_lengths"] * ctc_upsample_factor,
                         batch["target_lengths"],
                         blank_id,
                     )
@@ -345,7 +355,13 @@ def run_training(config: ExperimentConfig) -> None:
         if step % config.train.eval_interval == 0:
             if is_main_process():
                 logger.info("step %d | running eval on the full validation set ...", step)
+            eval_t0 = time.time()
             metrics = evaluate(model, val_loader, device, amp_dtype, blank_id)
+            # Push the training-throughput clock forward by however long eval
+            # took, so it isn't misattributed to the surrounding training
+            # steps - otherwise the next steps_per_sec/ETA log looks like a
+            # slowdown that never actually happened.
+            t0 += time.time() - eval_t0
             if is_main_process():
                 logger.info(
                     "eval @ step %d | loss %.4f | wer %.4f | cer %.4f",

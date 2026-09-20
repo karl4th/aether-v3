@@ -37,6 +37,22 @@ class AetherSpeechConfig:
 class CTCConfig:
     vocab_size: int = 257  # 256 UTF-8 byte values + 1 blank
     blank_id: int = 256
+    # CTC-only temporal upsampler: expands AetherSpeechEncoder's 12.5Hz
+    # states to 12.5 * upsample_factor Hz before the CTC head (see
+    # aether_v3.models.ctc_upsampler.CTCUpsampler). AetherSpeechEncoder's
+    # own output is untouched - only the CTC branch runs at the higher
+    # rate. Exists because CTC needs at least one input frame per target
+    # label (plus separators for adjacent repeats - see
+    # _ctc_min_input_length in aether_v3.data.mimi_cache), and 12.5
+    # frames/sec is below typical English byte-rate (~12-18 bytes/sec),
+    # making a large fraction of real utterances structurally
+    # CTC-infeasible at the raw Mimi frame rate.
+    upsample_factor: int = 4
+    upsampler_num_layers: int = 2
+    upsampler_num_heads: int = 12
+    upsampler_ffn_size: int = 3072
+    upsampler_dropout: float = 0.1
+    upsampler_rope_theta: float = 10000.0
 
 
 @dataclasses.dataclass

@@ -22,6 +22,12 @@ aether_speech:
 ctc:
   vocab_size: 257
   blank_id: 256
+  upsample_factor: 4
+  upsampler_num_layers: 2
+  upsampler_num_heads: 12
+  upsampler_ffn_size: 3072
+  upsampler_dropout: 0.1
+  upsampler_rope_theta: 10000.0
 
 data:
   dataset_id: hf-internal-testing/librispeech_asr_dummy

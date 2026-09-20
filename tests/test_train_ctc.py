@@ -76,7 +76,17 @@ def test_evaluate_runs_end_to_end_on_tiny_model(tmp_path):
     speech_cfg = AetherSpeechConfig(
         semantic_vocab_size=16, hidden_size=8, num_layers=1, num_heads=2, ffn_size=16, dropout=0.0
     )
-    ctc_cfg = CTCConfig(vocab_size=6, blank_id=5)
+    # upsampler_num_heads=2 to match hidden_size=8 (8 isn't divisible by
+    # the default 12 heads).
+    ctc_cfg = CTCConfig(
+        vocab_size=6,
+        blank_id=5,
+        upsample_factor=2,
+        upsampler_num_layers=1,
+        upsampler_num_heads=2,
+        upsampler_ffn_size=16,
+        upsampler_dropout=0.0,
+    )
     model = AetherCTCModel(speech_cfg, ctc_cfg)
 
     ds = CTCCachedDataset(_write_tiny_cache(tmp_path))
