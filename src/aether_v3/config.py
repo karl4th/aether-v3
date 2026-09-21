@@ -56,6 +56,70 @@ class CTCConfig:
 
 
 @dataclasses.dataclass
+class ResamplerConfig:
+    """AetherResampler: learned temporal compression of AetherSpeech's
+    12.5Hz output (Stage 2 spec Sec.7-11). `ratio` must be a power of two;
+    `ratio=1` (or `enabled=False`) makes the resampler an identity
+    pass-through - this is the "R1" native-rate experiment arm, `ratio=4`
+    is "R4". Kept as its own dataclass (rather than reusing CTCConfig's
+    upsampler fields) since this branch feeds the LLM bridge, not CTC, and
+    downsamples instead of upsamples.
+    """
+
+    enabled: bool = True
+    ratio: int = 4
+    num_heads: int = 12
+    ffn_size: int = 3072
+    dropout: float = 0.1
+    conv_kernel: int = 5
+
+
+@dataclasses.dataclass
+class BridgeConfig:
+    """AetherBridge: projects AetherSpeech/Resampler states into the frozen
+    LLM's embedding space (Stage 2 spec Sec.12-13). `output_dim` must match
+    the target LLM's hidden size (2560 for Qwen3-4B).
+    """
+
+    input_dim: int = 768
+    intermediate_dim: int = 3072
+    output_dim: int = 2560
+    dropout: float = 0.1
+    # Learned scalar multiplier applied after the final RMSNorm, so the
+    # Bridge's output RMS can be tuned to match the LLM's text-embedding
+    # RMS instead of assuming they start compatible (Stage 2 spec Sec.13).
+    init_output_scale: float = 1.0
+
+
+@dataclasses.dataclass
+class ConnectorConfig:
+    resampler: ResamplerConfig = dataclasses.field(default_factory=ResamplerConfig)
+    bridge: BridgeConfig = dataclasses.field(default_factory=BridgeConfig)
+
+
+@dataclasses.dataclass
+class LLMConfig:
+    model_id: str = "Qwen/Qwen3-4B"
+    frozen: bool = True
+    dtype: str = "bfloat16"
+
+
+@dataclasses.dataclass
+class Stage2LossConfig:
+    """Stage 2 spec Sec.16-17, 30-31, 37-40. `ctc_weight`/`kd_weight` are
+    0.0 until the corresponding phase (AetherSpeech unfrozen / distillation
+    experiment) is actually reached - see the phase gates in
+    docs/stage2_spec.md.
+    """
+
+    lm_weight: float = 1.0
+    ctc_weight: float = 0.0
+    kd_weight: float = 0.0
+    kd_direction: str = "teacher_to_student"
+    kd_temperature: float = 2.0
+
+
+@dataclasses.dataclass
 class DataConfig:
     dataset_id: str = "openslr/librispeech_asr"
     fallback_dataset_id: str = "distil-whisper/librispeech_asr"

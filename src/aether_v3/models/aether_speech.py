@@ -6,12 +6,27 @@ this encoder is bidirectional, unlike the downstream autoregressive LM).
 
 from __future__ import annotations
 
+from typing import Protocol
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from aether_v3.config import AetherSpeechConfig
 from aether_v3.models.rope import apply_rope, build_rope_cache
+
+
+class TransformerBlockConfig(Protocol):
+    """Structural type for what `TransformerBlock` reads off its `cfg`
+    argument - satisfied by `AetherSpeechConfig` as well as the smaller
+    private config dataclasses `CTCUpsampler`/`AetherResampler` build their
+    inner blocks with (they don't need the rest of `AetherSpeechConfig`'s
+    fields, e.g. `semantic_vocab_size`)."""
+
+    hidden_size: int
+    num_heads: int
+    ffn_size: int
+    dropout: float
 
 
 class RopeSelfAttention(nn.Module):
@@ -67,7 +82,7 @@ class FeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, cfg: AetherSpeechConfig) -> None:
+    def __init__(self, cfg: TransformerBlockConfig) -> None:
         super().__init__()
         self.norm1 = nn.LayerNorm(cfg.hidden_size)
         self.attn = RopeSelfAttention(cfg.hidden_size, cfg.num_heads, cfg.dropout)
