@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOKS = [
     ROOT / "notebooks" / "stage2" / "stage2_phase0.ipynb",
     ROOT / "notebooks" / "stage2" / "stage2_phase1.ipynb",
+    ROOT / "notebooks" / "stage2" / "stage2_phase2a.ipynb",
 ]
 
 

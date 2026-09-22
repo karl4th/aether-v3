@@ -2,7 +2,7 @@
 
 **Author:** Manifestro  
 **Started:** 2026-09-22  
-**Status:** In progress — Phase 0 complete  
+**Status:** In progress — Phase 0 and Phase 1 complete
 **Specification:** `docs/stage2_spec.md`
 
 ---
@@ -30,7 +30,7 @@ training loop work before a Qwen3-4B experiment is started.
 | Phase | Purpose | Status |
 |---|---|---|
 | Phase 0 | Qwen3-0.6B engineering harness and 128-example memorization gate | **Passed** |
-| Phase 1 | Qwen3-4B tiny overfit | Pending |
+| Phase 1 | Qwen3-4B tiny overfit | **Passed at step 2,000** |
 | Phase 2A | Frozen Qwen3-4B, ratio 1 transcription probe | Pending |
 | Phase 2B | Frozen Qwen3-4B, ratio 4 transcription probe | Pending |
 | Phase 3+ | LoRA, selective unfreezing, full training, KD and final benchmarks | Gated |
@@ -262,12 +262,117 @@ The gate supports proceeding to **Phase 1: Qwen3-4B tiny overfit**.
 - English transcription is the only target exercised so far. Semantic
   question answering and speech-native behavior remain later gated work.
 
-## 10. Next experiment
+## 10. Phase 1 configuration
 
-Phase 1 will repeat the tiny-overfit gate with Qwen3-4B while keeping the
-Stage 1 encoder frozen, using ratio 1 and training only the Connector and
-speech boundary embeddings. Before training, its own Qwen text embedding
-statistics must be measured and used to verify the 4B Connector's initial
-output scale. Phase 1 must retain the same forward, backward, cache-integrity,
-generation, logging, checkpoint and full-train-corpus checks used here.
+The accepted Phase 1 run is `run260922-132757`. It used frozen Qwen3-4B,
+the frozen Stage 1 encoder, a ratio-1 Connector, 64 fixed training examples,
+16 validation examples, batch size 1, and gradient accumulation over 16
+microbatches. The maximum budget was 5,000 optimizer steps, but the run was
+stopped at the saved step-2,000 checkpoint after the pre-registered tiny
+overfit gate passed.
 
+The run used git revision
+`ca358de5eb13a2943f0a93b5ad50fe297e14e8ec` and produced the accepted
+checkpoint:
+
+```text
+/content/drive/MyDrive/aether-v3/stage2/run260922-132757/phase1_2000.pt
+```
+
+## 11. Phase 1 embedding calibration
+
+The notebook measured the actual Qwen3-4B text embedding distribution before
+the first Connector forward and initialized the FP32 Bridge output scale from
+that measurement.
+
+| Statistic | Qwen3-4B text | Connector output |
+|---|---:|---:|
+| Mean | `-0.0000111` | `0.0000322` |
+| Standard deviation | `0.0210481` | `0.0209914` |
+| RMS | `0.0210481` | `0.0209914` |
+| L2 p50 | `1.06435` | `1.06212` |
+| L2 p90 | `1.22907` | `1.06499` |
+| L2 p99 | `1.28933` | `1.06621` |
+
+The calibrated initial scale was `0.0210481`. During training it increased
+smoothly to `0.0621689` at step 2,000. This was not accompanied by loss,
+gradient, or memory instability: the scale remained far below the original broken initialization of 1.0,
+while train loss
+continued to fall and the final gradient norm fell to 4.90.
+
+## 12. Phase 1 harness checks
+
+| Check | Result |
+|---|---|
+| Forward loss | `3.98087`, finite |
+| Logits shape | `[2, 252, 151936]`, finite |
+| Connector gradient norm | `867.68` before clipping |
+| Boundary gradients | non-zero |
+| Frozen Qwen gradients | `None` |
+| Frozen AetherSpeech gradients | `None` |
+| Text greedy generation parity | exact token match |
+| Live/cache state comparison | `allclose=true`, max diff `0.0009765625` |
+
+The text-generation parity control decoded to ` Paris. The capital of
+Germany is Berlin`. Pretraining speech generation completed normally at the
+configured token bound; its semantic quality was not a gate.
+
+## 13. Phase 1 training dynamics
+
+The log contains exactly 200 training records for steps 10 through 2,000,
+with no duplicate steps or concatenated earlier run.
+
+| Step | Train loss | Gradient norm before clipping | Output scale | Steps/s |
+|---:|---:|---:|---:|---:|
+| 10 | 4.96514 | 2931.38 | 0.021032 | 0.122 |
+| 100 | 3.93283 | 148.41 | 0.021839 | 0.330 |
+| 500 | 1.24092 | 104.56 | 0.037832 | 0.386 |
+| 1,000 | 0.90545 | 105.40 | 0.050449 | 0.390 |
+| 1,500 | 0.08520 | 23.09 | 0.057299 | 0.392 |
+| 2,000 | 0.02097 | 4.90 | 0.062169 | 0.395 |
+
+Allocated GPU memory stayed within `8.035–8.100 GB` and ended `0.005 GB`
+below its first logged value. Peak allocated memory was `9.737 GB`. No NaN,
+Inf, throughput degradation, or memory leak occurred.
+
+Periodic held-out evaluation produced:
+
+| Step | Validation loss | WER | CER |
+|---:|---:|---:|---:|
+| 0 | 4.81545 | 319.55% | 325.40% |
+| 500 | **3.75171** | 122.93% | 107.36% |
+| 1,000 | 4.02940 | 145.49% | 109.45% |
+| 2,000 | 4.81967 | **106.02%** | **82.83%** |
+
+These held-out numbers are diagnostic only; Phase 1's registered objective
+was memorization of the fixed training set.
+
+## 14. Phase 1 full-corpus result and gate decision
+
+The accepted step-2,000 checkpoint was decoded autoregressively over all 64
+training and 16 validation examples:
+
+| Split | Examples | Loss | WER | CER |
+|---|---:|---:|---:|---:|
+| Train | 64 | `0.014056` | **2.12%** | **2.62%** |
+| Validation | 16 | `4.807597` | `113.53%` | `87.45%` |
+
+The tiny-overfit gate required train WER at or below 5%. The observed 2.12%
+passed with substantial margin, so spending the remaining 3,000-step budget
+was unnecessary. Phase 1 therefore closed successfully at step 2,000.
+
+The authoritative result files are `phase1_2000.pt`,
+`phase1_2000_corpus_metrics.json`, and `phase1_report.json`. The intermediate
+`phase1_5000_corpus_metrics.json` contains the same measurements with the old
+planned checkpoint name and is not an accepted result artifact.
+
+## 15. Next experiment
+
+Phase 2A is a bounded frozen-Qwen3-4B ratio-1 transcription probe on a fixed
+larger subset. It keeps the Stage 1 encoder and Qwen frozen and trains only
+the Connector and speech boundary embeddings. Its own step-0 held-out loss
+is the baseline. By step 2,000 it must improve held-out loss by approximately
+5% and show speech-dependent decoding; by the hard 5,000-step limit it must
+improve held-out loss by approximately 10%, or show a clear sustained WER/CER
+trend. The identical subset, order, schedule, initialization policy, and
+number of optimizer updates will then be used for the ratio-4 Phase 2B run.

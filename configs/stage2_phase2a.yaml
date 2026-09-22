@@ -1,0 +1,50 @@
+connector:
+  resampler:
+    enabled: false
+    ratio: 1
+    num_heads: 12
+    ffn_size: 3072
+    dropout: 0.0
+    conv_kernel: 5
+  bridge:
+    input_dim: 768
+    intermediate_dim: 3072
+    output_dim: 2560
+    dropout: 0.1
+    # Placeholder only: the notebook measures Qwen3-4B text RMS and sets this
+    # scalar to the measured value before the first Connector forward.
+    init_output_scale: 0.02
+llm:
+  model_id: Qwen/Qwen3-4B
+  revision: main
+  frozen: true
+  dtype: bfloat16
+stage2_data:
+  dataset_id: karl4th/limmim
+  dataset_config: default
+  train_split: train
+  validation_split: validation
+  test_split: test
+  task: transcription
+  cache_dir: data_cache/stage2
+stage2_train:
+  drive_root: /content/drive/MyDrive/aether-v3/stage2
+  batch_size: 1
+  grad_accum_steps: 16
+  max_steps: 5000
+  warmup_steps: 200
+  lr: 1.0e-4
+  min_lr_ratio: 0.1
+  weight_decay: 0.01
+  grad_clip_norm: 1.0
+  log_interval: 10
+  eval_interval: 500
+  eval_steps: [0, 500, 1000, 2000, 3000, 5000]
+  save_interval: 250
+  eval_max_examples: 64
+  generation_max_new_tokens: 64
+  num_workers: 0
+  seed: 1337
+  amp_dtype: bfloat16
+  stage1_repo_id: manifestro/aetherASR-EN-v0.1
+  stage1_filename: last.pt
