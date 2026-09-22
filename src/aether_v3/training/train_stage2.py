@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import gc
 import hashlib
 import json
 import logging
@@ -84,7 +85,7 @@ def load_stage2_trainable_weights(
     return checkpoint
 
 
-@torch.no_grad()
+@torch.inference_mode()
 def evaluate_stage2(
     model: AetherSpeechLLM,
     loader: DataLoader,
@@ -95,12 +96,20 @@ def evaluate_stage2(
     task: str,
 ) -> dict[str, Any]:
     model.eval()
+    cuda_memory_before: dict[str, float] = {}
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+        cuda_memory_before = {
+            "eval_gpu_allocated_before_gb": torch.cuda.memory_allocated(device) / 2**30,
+            "eval_gpu_reserved_before_gb": torch.cuda.memory_reserved(device) / 2**30,
+        }
     losses: list[float] = []
     f1_scores: list[float] = []
     exact_scores: list[float] = []
     predictions: list[str] = []
     primary_references: list[str] = []
     seen = 0
+    progress = tqdm(total=max_examples, desc="Stage 2 eval", unit="utt", dynamic_ncols=True)
     for raw_batch in loader:
         batch = _to_device(raw_batch, device)
         output = model.forward_cached(batch)
@@ -123,10 +132,14 @@ def evaluate_stage2(
             f1_scores.append(answer_f1(prediction, references))
             exact_scores.append(answer_exact_match(prediction, references))
             seen += 1
+            progress.update(1)
+            del one, ids
             if seen >= max_examples:
                 break
+        del output, batch
         if seen >= max_examples:
             break
+    progress.close()
     model.train()
     metrics: dict[str, Any] = {
         "val_loss": sum(losses) / max(1, len(losses)),
@@ -138,6 +151,17 @@ def evaluate_stage2(
     else:
         metrics["answer_f1"] = sum(f1_scores) / max(1, len(f1_scores))
         metrics["exact_match"] = sum(exact_scores) / max(1, len(exact_scores))
+    metrics.update(cuda_memory_before)
+    if device.type == "cuda":
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize(device)
+        metrics.update(
+            {
+                "eval_gpu_allocated_after_cleanup_gb": torch.cuda.memory_allocated(device) / 2**30,
+                "eval_gpu_reserved_after_cleanup_gb": torch.cuda.memory_reserved(device) / 2**30,
+            }
+        )
     return metrics
 
 
@@ -161,7 +185,14 @@ def run_stage2_training(
     model = model or AetherSpeechLLM(
         config.aether_speech, config.connector, config.llm, speech_frozen=True
     )
-    model.to(device)
+    # This loop consumes cached AetherSpeech states, so the frozen encoder is
+    # never called. Keep it on CPU instead of wasting VRAM for the entire run.
+    model.encoder.to("cpu")
+    model.llm.to(device)  # type: ignore[arg-type]  # transformers stub mis-infers .to
+    model.connector.to(device)
+    if device.type == "cuda":
+        gc.collect()
+        torch.cuda.empty_cache()
     llm_dtype = next(model.llm.parameters()).dtype
     model.connector.to(dtype=llm_dtype)
 
