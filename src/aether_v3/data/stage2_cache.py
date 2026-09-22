@@ -31,6 +31,7 @@ import torch
 import torch.nn as nn
 import torchaudio
 from datasets import load_from_disk
+from tqdm.auto import tqdm
 
 from aether_v3.data.tokenizer import byte_ids_to_text
 from aether_v3.training.stage2_utils import (
@@ -143,6 +144,8 @@ def build_limmim_stage2_shards(
     encode_batch_size: int = 32,
     shard_size: int = 512,
     max_examples: int | None = None,
+    progress_total: int | None = None,
+    show_progress: bool = False,
 ) -> int:
     """Cache frozen Stage 1 states and transcript targets from ``karl4th/limmim``."""
     output_dir = Path(output_dir)
@@ -153,6 +156,14 @@ def build_limmim_stage2_shards(
     rows_to_skip = written
     records: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
+    progress = tqdm(
+        total=progress_total,
+        initial=min(written, progress_total) if progress_total is not None else written,
+        desc=f"AetherSpeech {role}",
+        unit="utt",
+        dynamic_ncols=True,
+        disable=not show_progress,
+    )
     prefix_ids = torch.tensor(
         tokenizer(transcription_prefix(), add_special_tokens=False)["input_ids"], dtype=torch.long
     )
@@ -202,8 +213,8 @@ def build_limmim_stage2_shards(
             )
             if len(records) >= shard_size:
                 flush()
+            progress.update(1)
         pending = []
-        logger.info("%s cache: encoded %d examples", role, written + len(records))
 
     for row_index, row in enumerate(rows):
         if row_index < rows_to_skip:
@@ -215,6 +226,7 @@ def build_limmim_stage2_shards(
             process_pending()
     process_pending()
     flush()
+    progress.close()
     logger.info("%s cache complete: %d examples", role, written)
     return written
 

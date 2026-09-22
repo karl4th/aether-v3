@@ -505,10 +505,24 @@ frozen Connector reaches a measured validation plateau. Selective upper
 AetherSpeech unfreezing is deferred until a later LoRA run also reaches a
 plateau.
 
-`stage2_r1_full.ipynb` initializes the Connector from the best R1 smoke WER
-checkpoint but intentionally creates a new optimizer, scheduler, and step
-counter. The source path, SHA-256, source step, and source provenance are
-stored with the new run. Training and validation use distinct dataset
+The original `karl4th/limmim` repository contains only 20,757 training
+rows. This exactly matches the obsolete pre-upsampler Stage 1 cache that
+kept 15.7% of the intended 132,553 utterances, despite the dataset card
+describing the full `train.100 + train.360` source. It remains valid for
+the already completed bounded smoke experiments, but it is rejected as a
+source for full training.
+
+`prepare_limmim_v2.ipynb` therefore rebuilds the source from raw
+LibriSpeech through frozen Mimi with no duration or CTC-feasibility filter.
+It writes exact transcripts, q0 semantic codes, UTF-8 byte targets, source
+metadata, and split provenance into restartable Parquet shards. The
+expected counts are 132,553 train, 2,703 validation, and 2,620 test.
+
+`stage2_r1_full.ipynb` consumes `karl4th/limmim-v2` and initializes the
+Connector from the best R1 smoke WER checkpoint but intentionally creates
+a new optimizer, scheduler, and step counter. The source path, SHA-256,
+source step, and source provenance are stored with the new run. Training
+and validation use distinct dataset
 splits, and all examples inside each split are cached; the full run does not
 reuse the bounded 4,096/256 smoke subsets.
 
