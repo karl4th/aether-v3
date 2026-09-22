@@ -38,3 +38,15 @@ def test_setup_imports_logging_before_using_it():
         )
         basic_config_line = setup[: setup.index("logging.basicConfig")].count("\n") + 1
         assert import_line < basic_config_line
+
+
+def test_r4_notebook_validates_resampled_speech_length():
+    path = ROOT / "notebooks" / "stage2" / "stage2_phase2a_2.ipynb"
+    notebook = json.loads(path.read_text())
+    forward_cell = next(
+        "".join(cell["source"])
+        for cell in notebook["cells"]
+        if cell["cell_type"] == "code" and "FORWARD: PASS" in "".join(cell["source"])
+    )
+    assert "int(speech_mask[i].sum())" in forward_cell
+    assert 'int(batch["speech_mask"][i].sum())' not in forward_cell
