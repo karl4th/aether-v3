@@ -15,7 +15,12 @@ from datasets import Dataset
 
 from aether_v3.config import AetherSpeechConfig, DataConfig
 from aether_v3.data.stage1_eval_manifest import filter_rows_by_duration, verify_byte_alignment
-from aether_v3.data.stage2_cache import build_stage2_cache, load_stage2_cache, save_stage2_cache
+from aether_v3.data.stage2_cache import (
+    build_slue_sqa5_shards,
+    build_stage2_cache,
+    load_stage2_cache,
+    save_stage2_cache,
+)
 from aether_v3.data.stage2_collate import collate_stage2_batch
 from aether_v3.data.stage2_dataset import Stage2CachedDataset
 from aether_v3.data.tokenizer import text_to_byte_ids
@@ -161,3 +166,40 @@ def test_verify_byte_alignment_raises_on_length_mismatch():
     except RuntimeError:
         return
     raise AssertionError("expected RuntimeError on length mismatch")
+
+
+def test_slue_builder_resamples_before_calling_current_mimi_api(tmp_path):
+    class FakeMimi:
+        target_sample_rate = 24000
+
+        def encode_semantic(self, waveforms):
+            assert len(waveforms[0]) == 24000
+            return [torch.tensor([1, 2, 3]).numpy()]
+
+    speech_cfg = AetherSpeechConfig(
+        semantic_vocab_size=16,
+        hidden_size=8,
+        num_layers=1,
+        num_heads=2,
+        ffn_size=16,
+        dropout=0.0,
+    )
+    rows = [
+        {
+            "question_id": "q1",
+            "question_audio": {"array": [0.0] * 16000, "sampling_rate": 16000},
+            "raw_document_text": "The answer is Paris.",
+            "answer_spans": [{"answer": "Paris"}],
+        }
+    ]
+    count = build_slue_sqa5_shards(
+        rows,
+        FakeMimi(),
+        AetherSpeechEncoder(speech_cfg),
+        _FakeTokenizer(),
+        tmp_path,
+        "train",
+        device="cpu",
+    )
+    assert count == 1
+    assert len(load_stage2_cache(tmp_path / "shard-000000.pt")) == 1

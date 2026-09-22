@@ -26,8 +26,10 @@ import logging
 from pathlib import Path
 from typing import Any, Protocol
 
+import numpy as np
 import torch
 import torch.nn as nn
+import torchaudio
 from datasets import load_from_disk
 
 from aether_v3.data.tokenizer import byte_ids_to_text
@@ -168,8 +170,13 @@ def build_slue_sqa5_shards(
         if max_examples is not None and written + len(records) >= max_examples:
             break
         audio = row["question_audio"]
-        waveform = audio["array"]
-        codes = mimi.encode_semantic([waveform], orig_sample_rate=audio["sampling_rate"])[0]
+        waveform = np.asarray(audio["array"], dtype=np.float32)
+        sample_rate = int(audio["sampling_rate"])
+        if sample_rate != mimi.target_sample_rate:
+            waveform = torchaudio.functional.resample(
+                torch.from_numpy(waveform), sample_rate, mimi.target_sample_rate
+            ).numpy()
+        codes = mimi.encode_semantic([waveform])[0]
         code_tensor = torch.as_tensor(codes, dtype=torch.long, device=device).unsqueeze(0)
         mask = torch.ones_like(code_tensor, dtype=torch.bool)
         with torch.no_grad():
