@@ -375,3 +375,8 @@ speech dependence, scale stability, throughput, memory, and the viability of
 the larger-data path. Its result is explicitly not the final answer to the
 Phase 2A research question. The actual Phase 2A design will be recorded after
 the experiment plan is revised.
+
+A parallel companion smoke, `stage2_phase2a_2.ipynb`, runs the same data,
+effective batch size, step budget, schedule, and evaluations with a ratio-4
+Resampler. It is an efficiency/information-retention comparison against the
+ratio-1 smoke and likewise does not close the revised Phase 2A question.

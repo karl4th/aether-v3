@@ -125,6 +125,9 @@ Run these notebooks in order:
    a fixed 4,096-example training subset and 256-example held-out subset
    with frozen Qwen3-4B. This is a smoke experiment before the revised,
    separate Phase 2A experiment. Run only after Phase 1 passes.
+4. `notebooks/stage2/stage2_phase2a_2.ipynb` — parallel matched R4 smoke on
+   the same 4,096/256 examples, effective batch 16, schedule, and evaluation
+   points. It changes only the Connector resampling path from ratio 1 to 4.
 
 Each run writes directly to Google Drive under
 `aether-v3/stage2/runYYMMDD-HHMMSS`, including logs, `last.pt`, periodic
