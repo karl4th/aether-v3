@@ -368,11 +368,10 @@ planned checkpoint name and is not an accepted result artifact.
 
 ## 15. Next experiment
 
-Phase 2A is a bounded frozen-Qwen3-4B ratio-1 transcription probe on a fixed
-larger subset. It keeps the Stage 1 encoder and Qwen frozen and trains only
-the Connector and speech boundary embeddings. Its own step-0 held-out loss
-is the baseline. By step 2,000 it must improve held-out loss by approximately
-5% and show speech-dependent decoding; by the hard 5,000-step limit it must
-improve held-out loss by approximately 10%, or show a clear sustained WER/CER
-trend. The identical subset, order, schedule, initialization policy, and
-number of optimizer updates will then be used for the ratio-4 Phase 2B run.
+Before the revised Phase 2A experiment, `stage2_phase2a_smoke.ipynb` runs a
+bounded frozen-Qwen3-4B ratio-1 preflight on a fixed 4,096-example training
+subset and 256-example held-out subset. It checks optimization behavior,
+speech dependence, scale stability, throughput, memory, and the viability of
+the larger-data path. Its result is explicitly not the final answer to the
+Phase 2A research question. The actual Phase 2A design will be recorded after
+the experiment plan is revised.

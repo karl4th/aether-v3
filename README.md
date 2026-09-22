@@ -121,10 +121,10 @@ Run these notebooks in order:
    integrity, and a clean 5,000-step memorization run on 128 examples.
 2. `notebooks/stage2/stage2_phase1.ipynb` — Phase 1 tiny overfit on exactly 64
    transcription examples with Qwen3-4B. Run only after Phase 0 passes.
-3. `notebooks/stage2/stage2_phase2a.ipynb` — bounded Phase 2A probe on a
-   fixed 4,096-example training subset and 256-example held-out subset with
-   frozen Qwen3-4B at the native ratio-1 speech-state rate. Run only after
-   Phase 1 passes.
+3. `notebooks/stage2/stage2_phase2a_smoke.ipynb` — bounded R1 preflight on
+   a fixed 4,096-example training subset and 256-example held-out subset
+   with frozen Qwen3-4B. This is a smoke experiment before the revised,
+   separate Phase 2A experiment. Run only after Phase 1 passes.
 
 Each run writes directly to Google Drive under
 `aether-v3/stage2/runYYMMDD-HHMMSS`, including logs, `last.pt`, periodic
