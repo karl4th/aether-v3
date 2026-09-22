@@ -48,3 +48,6 @@ stage2_train:
   amp_dtype: bfloat16
   stage1_repo_id: manifestro/aetherASR-EN-v0.1
   stage1_filename: last.pt
+  # Phase 1 converged safely at 0.062. Abort and preserve a diagnostic
+  # checkpoint if the FP32 scalar runs far beyond that established range.
+  output_scale_abort_max: 0.12

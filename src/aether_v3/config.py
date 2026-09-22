@@ -159,6 +159,7 @@ class Stage2TrainConfig:
     stage1_filename: str = "last.pt"
     stage1_revision: str = "main"
     resume_from: str | None = None
+    output_scale_abort_max: float | None = None
 
 
 @dataclasses.dataclass

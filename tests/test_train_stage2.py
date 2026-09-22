@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import torch
 from transformers import Qwen3Config, Qwen3ForCausalLM
 
@@ -108,3 +109,20 @@ def test_complete_stage2_train_eval_checkpoint_and_resume(tmp_path):
     )
     checkpoint = torch.load(run / "last.pt", weights_only=False)
     assert checkpoint["step"] == 3
+
+
+def test_output_scale_guard_aborts_and_saves_diagnostic_checkpoint(tmp_path):
+    train = tmp_path / "train"
+    validation = tmp_path / "validation"
+    _write_shard(train)
+    _write_shard(validation)
+    run = tmp_path / "run"
+    model, cfg = _model_and_config()
+    cfg.stage2_train.output_scale_abort_max = 0.5
+
+    with pytest.raises(RuntimeError, match="Bridge output scale guard"):
+        run_stage2_training(cfg, run, train, validation, model=model, tokenizer=TinyTokenizer())
+
+    checkpoint = torch.load(run / "abort_output_scale.pt", weights_only=False)
+    assert checkpoint["step"] == 0
+    assert '"reason": "bridge_output_scale_guard"' in (run / "log.jsonl").read_text()

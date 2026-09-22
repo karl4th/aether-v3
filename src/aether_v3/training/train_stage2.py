@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import logging
+import math
 import subprocess
 import time
 from pathlib import Path
@@ -183,6 +184,38 @@ def run_stage2_training(
         step = int(checkpoint["step"])
         best.update(checkpoint.get("metrics", {}))
 
+    def enforce_output_scale_guard(current_step: int) -> float:
+        output_scale = float(unwrapped_model.connector.bridge.output_scale.detach())
+        abort_max = config.stage2_train.output_scale_abort_max
+        if math.isfinite(output_scale) and (abort_max is None or abs(output_scale) <= abort_max):
+            return output_scale
+        reason = {
+            "step": current_step,
+            "status": "aborted",
+            "reason": "bridge_output_scale_guard",
+            "bridge_output_scale": output_scale,
+            "output_scale_abort_max": abort_max,
+        }
+        append_jsonl(run_dir / "log.jsonl", reason)
+        save_stage2_checkpoint(
+            run_dir / "abort_output_scale.pt",
+            model,
+            optimizer,
+            scheduler,
+            current_step,
+            best,
+            config_dict,
+            provenance,
+        )
+        logger.error("%s", reason)
+        raise RuntimeError(
+            "Bridge output scale guard stopped training at step "
+            f"{current_step}: scale={output_scale}, limit={abort_max}. "
+            f"Diagnostic checkpoint: {run_dir / 'abort_output_scale.pt'}"
+        )
+
+    enforce_output_scale_guard(step)
+
     model.train()
     optimizer.zero_grad(set_to_none=True)
     iterator = iter(train_loader)
@@ -256,6 +289,8 @@ def run_stage2_training(
         optimizer.zero_grad(set_to_none=True)
         step += 1
 
+        output_scale = enforce_output_scale_guard(step)
+
         if step % config.stage2_train.log_interval == 0:
             record = {
                 "step": step,
@@ -264,9 +299,7 @@ def run_stage2_training(
                 "elapsed_seconds": time.time() - started,
                 "steps_per_second": step / max(time.time() - started, 1e-9),
                 "grad_norm": grad_norm,
-                "bridge_output_scale": float(
-                    unwrapped_model.connector.bridge.output_scale.detach()
-                ),
+                "bridge_output_scale": output_scale,
             }
             if device.type == "cuda":
                 record["gpu_allocated_gb"] = torch.cuda.memory_allocated() / 2**30
