@@ -7,6 +7,7 @@ from aether_v3.models.aether_speech import AetherSpeechEncoder
 from aether_v3.training.stage2_utils import (
     answer_exact_match,
     answer_f1,
+    answer_strings,
     create_run_dir,
     load_stage1_encoder,
 )
@@ -43,3 +44,8 @@ def test_qa_metrics_accept_articles_and_punctuation():
     references = ["The Eiffel Tower"]
     assert answer_exact_match("eiffel tower!", references) == 1.0
     assert answer_f1("Tower", references) > 0.0
+
+
+def test_answer_strings_accepts_hugging_face_dict_of_lists_layout():
+    spans = {"answer": ["three", "3"], "start_second": [1.0, 1.0]}
+    assert answer_strings(spans) == ["three", "3"]

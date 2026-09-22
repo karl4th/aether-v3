@@ -33,7 +33,7 @@ import torchaudio
 from datasets import load_from_disk
 
 from aether_v3.data.tokenizer import byte_ids_to_text
-from aether_v3.training.stage2_utils import first_answer, qa_prefix
+from aether_v3.training.stage2_utils import answer_strings, first_answer, qa_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +137,7 @@ def build_slue_sqa5_shards(
     role: str,
     device: str = "cuda",
     shard_size: int = 256,
+    encode_batch_size: int = 16,
     max_examples: int | None = None,
 ) -> int:
     """Build restartable Stage 2B shards from streamed SLUE-SQA-5 rows.
@@ -152,6 +153,8 @@ def build_slue_sqa5_shards(
     existing_paths = sorted(output_dir.glob("shard-*.pt"))
     written = sum(len(load_stage2_cache(path)) for path in existing_paths)
     rows_to_skip = written
+    pending_rows: list[dict[str, Any]] = []
+    pending_waveforms: list[np.ndarray] = []
 
     def flush() -> None:
         nonlocal records, written
@@ -164,10 +167,62 @@ def build_slue_sqa5_shards(
         written += len(records)
         records = []
 
+    def encode_with_oom_retry(waveforms: list[np.ndarray]) -> list[np.ndarray]:
+        try:
+            return mimi.encode_semantic(waveforms)
+        except torch.cuda.OutOfMemoryError:
+            if len(waveforms) == 1:
+                raise
+            torch.cuda.empty_cache()
+            middle = len(waveforms) // 2
+            return encode_with_oom_retry(waveforms[:middle]) + encode_with_oom_retry(
+                waveforms[middle:]
+            )
+
+    def process_pending() -> None:
+        nonlocal pending_rows, pending_waveforms
+        if not pending_rows:
+            return
+        codes_list = encode_with_oom_retry(pending_waveforms)
+        lengths = [len(codes) for codes in codes_list]
+        max_length = max(lengths)
+        code_tensor = torch.zeros(len(codes_list), max_length, dtype=torch.long, device=device)
+        mask = torch.zeros_like(code_tensor, dtype=torch.bool)
+        for index, codes in enumerate(codes_list):
+            length = lengths[index]
+            code_tensor[index, :length] = torch.as_tensor(codes, dtype=torch.long, device=device)
+            mask[index, :length] = True
+        with torch.no_grad():
+            batch_states = encoder(code_tensor, mask).to("cpu", dtype=torch.float16)
+
+        for index, row in enumerate(pending_rows):
+            answers = answer_strings(row["answer_spans"])
+            answer = first_answer(row["answer_spans"])
+            prefix = qa_prefix(row["raw_document_text"])
+            prefix_ids = tokenizer(prefix, add_special_tokens=False)["input_ids"]
+            target_ids = tokenizer(answer, add_special_tokens=False)["input_ids"] + [
+                tokenizer.eos_token_id
+            ]
+            length = lengths[index]
+            records.append(
+                {
+                    "sample_id": row["question_id"],
+                    "speech_states": batch_states[index, :length].clone(),
+                    "speech_length": length,
+                    "prefix_ids": torch.tensor(prefix_ids, dtype=torch.long),
+                    "target_ids": torch.tensor(target_ids, dtype=torch.long),
+                    "references": answers,
+                }
+            )
+            if len(records) >= shard_size:
+                flush()
+        pending_rows = []
+        pending_waveforms = []
+
     for row_index, row in enumerate(rows):
         if row_index < rows_to_skip:
             continue
-        if max_examples is not None and written + len(records) >= max_examples:
+        if max_examples is not None and written + len(records) + len(pending_rows) >= max_examples:
             break
         audio = row["question_audio"]
         waveform = np.asarray(audio["array"], dtype=np.float32)
@@ -176,30 +231,12 @@ def build_slue_sqa5_shards(
             waveform = torchaudio.functional.resample(
                 torch.from_numpy(waveform), sample_rate, mimi.target_sample_rate
             ).numpy()
-        codes = mimi.encode_semantic([waveform])[0]
-        code_tensor = torch.as_tensor(codes, dtype=torch.long, device=device).unsqueeze(0)
-        mask = torch.ones_like(code_tensor, dtype=torch.bool)
-        with torch.no_grad():
-            states = encoder(code_tensor, mask)[0].to("cpu", dtype=torch.float16)
-
-        answers = [str(span["answer"]).strip() for span in row["answer_spans"] if span["answer"]]
-        answer = first_answer(row["answer_spans"])
-        prefix = qa_prefix(row["raw_document_text"])
-        prefix_ids = tokenizer(prefix, add_special_tokens=False)["input_ids"]
-        target_ids = tokenizer(answer, add_special_tokens=False)["input_ids"] + [
-            tokenizer.eos_token_id
-        ]
-        records.append(
-            {
-                "sample_id": row["question_id"],
-                "speech_states": states,
-                "speech_length": states.shape[0],
-                "prefix_ids": torch.tensor(prefix_ids, dtype=torch.long),
-                "target_ids": torch.tensor(target_ids, dtype=torch.long),
-                "references": answers,
-            }
-        )
-        if len(records) >= shard_size:
-            flush()
+        # Validate targets before spending GPU time on this row.
+        first_answer(row["answer_spans"])
+        pending_rows.append(row)
+        pending_waveforms.append(waveform)
+        if len(pending_rows) >= encode_batch_size:
+            process_pending()
+    process_pending()
     flush()
     return written

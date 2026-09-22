@@ -103,6 +103,7 @@ class LLMConfig:
     revision: str = "main"
     frozen: bool = True
     dtype: str = "bfloat16"
+    gradient_checkpointing: bool = True
 
 
 @dataclasses.dataclass

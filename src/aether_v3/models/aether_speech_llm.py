@@ -74,6 +74,8 @@ class AetherSpeechLLM(nn.Module):
             self.encoder.requires_grad_(False)
         if self.llm_frozen:
             self.llm.requires_grad_(False)
+        if llm_cfg.gradient_checkpointing and hasattr(self.llm, "gradient_checkpointing_enable"):
+            self.llm.gradient_checkpointing_enable()
         self.train(self.training)
 
     def train(self, mode: bool = True) -> AetherSpeechLLM:

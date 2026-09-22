@@ -189,7 +189,7 @@ def test_slue_builder_resamples_before_calling_current_mimi_api(tmp_path):
             "question_id": "q1",
             "question_audio": {"array": [0.0] * 16000, "sampling_rate": 16000},
             "raw_document_text": "The answer is Paris.",
-            "answer_spans": [{"answer": "Paris"}],
+            "answer_spans": {"answer": ["Paris"], "start_second": [0.0]},
         }
     ]
     count = build_slue_sqa5_shards(

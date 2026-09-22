@@ -51,11 +51,19 @@ def qa_prefix(document: str) -> str:
     )
 
 
-def first_answer(answer_spans: list[dict[str, Any]]) -> str:
-    for span in answer_spans:
-        answer = str(span.get("answer", "")).strip()
-        if answer:
-            return answer
+def answer_strings(answer_spans: Any) -> list[str]:
+    """Normalize both HF Sequence layouts used by different datasets versions."""
+    if isinstance(answer_spans, dict):
+        values = answer_spans.get("answer", [])
+    else:
+        values = [span.get("answer", "") for span in answer_spans]
+    return [str(answer).strip() for answer in values if str(answer).strip()]
+
+
+def first_answer(answer_spans: Any) -> str:
+    answers = answer_strings(answer_spans)
+    if answers:
+        return answers[0]
     raise ValueError("SLUE-SQA-5 row has no non-empty answer span")
 
 

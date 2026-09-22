@@ -98,6 +98,7 @@ def run_stage2_training(
     train_cache_dir: str | Path,
     validation_cache_dir: str | Path,
     model: AetherSpeechLLM | None = None,
+    tokenizer: Any | None = None,
 ) -> Path:
     """Train Connector on cached speech, writing every artifact directly to ``run_dir``."""
     run_dir = Path(run_dir)
@@ -105,7 +106,9 @@ def run_stage2_training(
     (run_dir / "periodic").mkdir(exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(config.stage2_train.seed)
-    tokenizer = AutoTokenizer.from_pretrained(config.llm.model_id, revision=config.llm.revision)
+    tokenizer = tokenizer or AutoTokenizer.from_pretrained(
+        config.llm.model_id, revision=config.llm.revision
+    )
     model = model or AetherSpeechLLM(
         config.aether_speech, config.connector, config.llm, speech_frozen=True
     )
@@ -155,6 +158,10 @@ def run_stage2_training(
         for name, value in checkpoint["trainable_model"].items():
             named[name].data.copy_(value.to(device=device, dtype=named[name].dtype))
         optimizer.load_state_dict(checkpoint["optimizer"])
+        for state in optimizer.state.values():
+            for key, value in state.items():
+                if torch.is_tensor(value):
+                    state[key] = value.to(device)
         scheduler.load_state_dict(checkpoint["scheduler"])
         step = int(checkpoint["step"])
         best.update(checkpoint.get("metrics", {}))
@@ -178,7 +185,7 @@ def run_stage2_training(
                 raise RuntimeError("Qwen returned no training loss")
             loss = output.loss / config.stage2_train.grad_accum_steps
             loss.backward()
-            running += float(loss)
+            running += float(loss.detach())
         torch.nn.utils.clip_grad_norm_(params, config.stage2_train.grad_clip_norm)
         optimizer.step()
         scheduler.step()
