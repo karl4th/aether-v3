@@ -2,7 +2,7 @@
 
 **Author:** Manifestro  
 **Started:** 2026-09-22  
-**Status:** In progress — Phase 0 and Phase 1 complete
+**Status:** In progress — Phase 0, Phase 1, and R1/R4 preflight complete
 **Specification:** `docs/stage2_spec.md`
 
 ---
@@ -31,6 +31,7 @@ training loop work before a Qwen3-4B experiment is started.
 |---|---|---|
 | Phase 0 | Qwen3-0.6B engineering harness and 128-example memorization gate | **Passed** |
 | Phase 1 | Qwen3-4B tiny overfit | **Passed at step 2,000** |
+| Preflight R1/R4 | 4,096-example frozen-Qwen smoke comparison | **Complete; R1 selected** |
 | Phase 2A | Frozen Qwen3-4B, ratio 1 transcription probe | Pending |
 | Phase 2B | Frozen Qwen3-4B, ratio 4 transcription probe | Pending |
 | Phase 3+ | LoRA, selective unfreezing, full training, KD and final benchmarks | Gated |
@@ -366,7 +367,7 @@ The authoritative result files are `phase1_2000.pt`,
 `phase1_5000_corpus_metrics.json` contains the same measurements with the old
 planned checkpoint name and is not an accepted result artifact.
 
-## 15. Next experiment
+## 15. R1 larger-subset smoke
 
 Before the revised Phase 2A experiment, `stage2_phase2a_smoke.ipynb` runs a
 bounded frozen-Qwen3-4B ratio-1 preflight on a fixed 4,096-example training
@@ -376,7 +377,140 @@ the larger-data path. Its result is explicitly not the final answer to the
 Phase 2A research question. The actual Phase 2A design will be recorded after
 the experiment plan is revised.
 
-A parallel companion smoke, `stage2_phase2a_2.ipynb`, runs the same data,
-effective batch size, step budget, schedule, and evaluations with a ratio-4
-Resampler. It is an efficiency/information-retention comparison against the
-ratio-1 smoke and likewise does not close the revised Phase 2A question.
+The ratio-1 smoke used frozen AetherSpeech and Qwen3-4B, a trainable R1
+Connector, 4,096 fixed training examples, 256 fixed held-out examples,
+microbatch 2, gradient accumulation 8, and an effective batch size of 16.
+It ran for the complete 5,000-step budget.
+
+Training summary:
+
+| Quantity | Result |
+|---|---:|
+| First logged train loss | `4.51791` |
+| Final train loss | `0.47186` |
+| Step-0 validation loss | `4.91474` |
+| Step-5,000 validation loss | `0.60120` |
+| Validation-loss reduction at step 2,000 | `83.90%` |
+| Validation-loss reduction at step 5,000 | `87.77%` |
+| Final gradient norm before clipping | `18.49` |
+| Output scale, start → end | `0.021048 → 0.101612` |
+| Final optimizer throughput | `0.698 steps/s` |
+| Allocated-memory growth | `+0.029 GB` |
+
+Selected periodic evaluations on the first 64 held-out examples:
+
+| Step | Validation loss | WER | CER |
+|---:|---:|---:|---:|
+| 2,000 | `0.79139` | `30.77%` | `19.77%` |
+| 3,000 | `0.61485` | `22.20%` | `14.09%` |
+| 5,000 | `0.60120` | — | — |
+
+The step-5,000 full evaluation on all 256 held-out examples produced:
+
+| Examples | Loss | WER | CER |
+|---:|---:|---:|---:|
+| 256 | `0.698386` | **27.97%** | **16.33%** |
+
+The difference between the 64-example periodic metric and the full
+256-example result is expected; the full result is the authoritative R1
+quality number.
+
+Qualitatively, errors were predominantly phonetic or locally linguistic,
+not unrelated language-model completions. Examples included `PAY → PAINT`,
+`PAPERS → BATHER`, and near-verbatim recovery of long sentences.
+
+## 16. R1 speech-dependence controls
+
+The mandatory controls used 16 held-out examples:
+
+| Condition | WER | CER |
+|---|---:|---:|
+| Normal speech | **23.68%** | **13.92%** |
+| Shuffled speech states | 123.68% | 88.24% |
+| Zero speech states | 139.85% | 92.78% |
+| Wrong example's speech | 111.28% | 83.55% |
+| Truncated speech | 57.89% | 53.46% |
+
+Every perturbation degraded both WER and CER substantially. This rules out
+target leakage and generic language-model continuation as explanations for
+the normal-path result. It also shows that temporal ordering, example
+identity, and the latter portion of the utterance all materially affect the
+generated transcript.
+
+**R1 smoke verdict: passed.** Frozen Qwen3-4B can use a learned Connector to
+decode unseen AetherSpeech states, and the result depends on the actual
+speech input.
+
+## 17. Parallel R4 smoke
+
+The matched companion smoke kept the same 4,096/256 examples, microbatch 2,
+effective batch 16, optimizer schedule, evaluation points, Qwen3-4B, and
+5,000-step maximum. The only architectural change was enabling the learned
+ratio-4 Resampler, reducing the speech-state rate from 12.5 Hz to
+approximately 3.125 Hz.
+
+The experiment was stopped after the step-3,000 evaluation because the
+comparison was already decisive and `periodic/step_003000.pt` had been
+saved.
+
+Matched step-3,000 comparison:
+
+| Metric | R1 | R4 |
+|---|---:|---:|
+| Train loss | ~`0.53` | `2.68752` |
+| Validation loss | **`0.61485`** | `3.01442` |
+| WER | **22.20%** | `94.16%` |
+| CER | **14.09%** | `70.23%` |
+| Throughput | **0.698 steps/s** | 0.601 steps/s |
+| Peak allocated VRAM | 11.96 GB | **10.05 GB** |
+| Output scale | approaching `0.1016` at completion | `0.09772` |
+
+R4 saved approximately 1.9 GB of peak allocated VRAM but was slower and far
+worse on every quality metric. Its hypotheses were grammatical English but
+largely unrelated to the reference, for example `HE WAS A MAN OF VERY STRONG
+CHARACTER` for `HE ALSO THOUGHT OF HIS MANAGERIAL POSITION`. This is evidence
+that the 4× temporal compression removed information needed for accurate
+transcription; Qwen then filled the missing evidence with its language prior.
+
+The R4 values above are limited to the confirmed step-3,000 console output;
+the complete R4 log was not archived with this report. That limitation does
+not affect the architectural decision because the matched gap was already
+very large and R4 had also failed to provide a throughput advantage.
+
+**R4 smoke verdict: stopped as a negative result.** Spending the remaining
+2,000 steps was not justified.
+
+## 18. R1/R4 decision
+
+R1 is selected for subsequent Stage 2 work:
+
+- it preserves the native 12.5 Hz AetherSpeech representation;
+- it reached 27.97% WER / 16.33% CER on the full held-out256 subset after
+  seeing only 4,096 training examples;
+- its output passed all speech-dependence controls;
+- it was faster than the R4 implementation in the matched smoke;
+- A100 memory headroom remained sufficient at microbatch 2.
+
+R4 is not carried forward for transcription. Its modest memory saving does
+not compensate for the large information loss and lower throughput.
+
+These smoke experiments answer the temporal-rate preflight question, but
+they do not close the revised Phase 2A research question or Stage 2 itself.
+
+## 19. Next planned phase
+
+Under the original frozen specification, the next phase after selecting the
+temporal configuration was Phase 3: R1 Connector plus LoRA on the upper
+Qwen3-4B attention projections. The original sequence then called for
+selective AetherSpeech unfreezing if needed, followed by full LibriSpeech
+training, optional text-teacher distillation, final transcription evaluation,
+and a separate semantic speech-understanding track.
+
+The experiment plan is now under review. Two evidence-supported options are:
+
+1. run a bounded R1+LoRA probe before scaling; or
+2. establish a clean frozen-Qwen R1 baseline on full LibriSpeech
+   `train.100 + train.360`, then measure the incremental value of LoRA.
+
+No new Phase 2A notebook is defined by this report; its design will be
+recorded separately after the revised objective and gate are chosen.
