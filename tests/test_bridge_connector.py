@@ -53,3 +53,18 @@ def test_connector_boundary_embeddings_are_learnable_params():
     assert connector.speech_end.shape == (20,)
     assert connector.speech_start.requires_grad
     assert connector.speech_end.requires_grad
+
+
+def test_bridge_output_scale_stays_fp32_when_connector_is_cast():
+    connector = AetherConnector(
+        12,
+        ConnectorConfig(
+            resampler=ResamplerConfig(enabled=False, ratio=1),
+            bridge=BridgeConfig(input_dim=12, intermediate_dim=24, output_dim=20),
+        ),
+    )
+
+    connector.to(dtype=torch.bfloat16)
+
+    assert connector.bridge.output_scale.dtype == torch.float32
+    assert connector.bridge.mlp.in_proj.weight.dtype == torch.bfloat16

@@ -11,7 +11,7 @@ connector:
     intermediate_dim: 3072
     output_dim: 1024
     dropout: 0.0
-    init_output_scale: 1.0
+    init_output_scale: 0.03
 llm:
   model_id: Qwen/Qwen3-0.6B
   revision: main
@@ -29,13 +29,13 @@ stage2_train:
   drive_root: /content/drive/MyDrive/aether-v3/stage2
   batch_size: 2
   grad_accum_steps: 1
-  max_steps: 100
-  warmup_steps: 10
+  max_steps: 5000
+  warmup_steps: 200
   lr: 1.0e-4
   log_interval: 10
-  eval_interval: 100
-  eval_steps: [0, 100]
-  save_interval: 50
+  eval_interval: 500
+  eval_steps: [0, 100, 500, 1000, 2000, 3000, 4000, 5000]
+  save_interval: 250
   eval_max_examples: 8
   generation_max_new_tokens: 16
   num_workers: 0

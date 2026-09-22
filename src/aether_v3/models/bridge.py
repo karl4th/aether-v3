@@ -30,9 +30,19 @@ class AetherBridge(nn.Module):
         self.output_norm = RMSNorm(cfg.output_dim)
         self.output_scale = nn.Parameter(torch.tensor(float(cfg.init_output_scale)))
 
+    def _apply(self, fn):
+        """Move/cast the module while retaining an FP32 learnable scale."""
+        super()._apply(fn)
+        self.output_scale.data = self.output_scale.data.float()
+        if self.output_scale.grad is not None:
+            self.output_scale.grad.data = self.output_scale.grad.data.float()
+        return self
+
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         x = self.input_norm(hidden_states)
         x = self.mlp(x)
         x = self.dropout(x)
         x = self.output_norm(x)
-        return x * self.output_scale
+        # The multiplication keeps activations in their original dtype while
+        # autograd accumulates an FP32 gradient on ``output_scale``.
+        return x * self.output_scale.to(dtype=x.dtype)
