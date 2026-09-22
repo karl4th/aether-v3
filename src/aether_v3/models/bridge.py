@@ -32,10 +32,19 @@ class AetherBridge(nn.Module):
 
     def _apply(self, fn):
         """Move/cast the module while retaining an FP32 learnable scale."""
+        scale = self.output_scale.detach().float().clone()
+        scale_grad = (
+            self.output_scale.grad.detach().float().clone()
+            if self.output_scale.grad is not None
+            else None
+        )
         super()._apply(fn)
-        self.output_scale.data = self.output_scale.data.float()
-        if self.output_scale.grad is not None:
-            self.output_scale.grad.data = self.output_scale.grad.data.float()
+        # ``super()._apply`` tells us the destination device, but its dtype
+        # conversion must not quantize this scalar even temporarily.
+        self.output_scale.data = scale.to(device=self.output_scale.device)
+        self.output_scale.grad = (
+            scale_grad.to(device=self.output_scale.device) if scale_grad is not None else None
+        )
         return self
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:

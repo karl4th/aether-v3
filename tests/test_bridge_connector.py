@@ -60,11 +60,14 @@ def test_bridge_output_scale_stays_fp32_when_connector_is_cast():
         12,
         ConnectorConfig(
             resampler=ResamplerConfig(enabled=False, ratio=1),
-            bridge=BridgeConfig(input_dim=12, intermediate_dim=24, output_dim=20),
+            bridge=BridgeConfig(
+                input_dim=12, intermediate_dim=24, output_dim=20, init_output_scale=0.03
+            ),
         ),
     )
 
     connector.to(dtype=torch.bfloat16)
 
     assert connector.bridge.output_scale.dtype == torch.float32
+    assert abs(connector.bridge.output_scale.detach().item() - 0.03) < 1e-6
     assert connector.bridge.mlp.in_proj.weight.dtype == torch.bfloat16
