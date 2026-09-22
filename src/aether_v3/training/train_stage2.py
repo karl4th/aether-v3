@@ -103,7 +103,8 @@ def evaluate_stage2(
             "eval_gpu_allocated_before_gb": torch.cuda.memory_allocated(device) / 2**30,
             "eval_gpu_reserved_before_gb": torch.cuda.memory_reserved(device) / 2**30,
         }
-    losses: list[float] = []
+    loss_sum = 0.0
+    loss_examples = 0
     f1_scores: list[float] = []
     exact_scores: list[float] = []
     predictions: list[str] = []
@@ -111,20 +112,24 @@ def evaluate_stage2(
     seen = 0
     progress = tqdm(total=max_examples, desc="Stage 2 eval", unit="utt", dynamic_ncols=True)
     for raw_batch in loader:
+        remaining = max_examples - seen
+        raw_batch = {
+            key: value[:remaining] if torch.is_tensor(value) or isinstance(value, list) else value
+            for key, value in raw_batch.items()
+        }
         batch = _to_device(raw_batch, device)
         output = model.forward_cached(batch)
         if output.loss is not None:
-            losses.append(float(output.loss))
-        # Generation is deliberately per-example; see generate_cached.
-        for index in range(batch["speech_states"].shape[0]):
-            one = {
-                key: value[index : index + 1] if torch.is_tensor(value) else value
-                for key, value in batch.items()
-                if key not in {"sample_ids", "references"}
-            }
-            ids = model.generate_cached(one, tokenizer.eos_token_id, max_new_tokens=max_new_tokens)[
-                0
-            ]
+            current_batch_size = int(batch["speech_states"].shape[0])
+            loss_sum += float(output.loss) * current_batch_size
+            loss_examples += current_batch_size
+        generation_batch = {
+            key: batch[key] for key in ("speech_states", "speech_mask", "prefix_ids", "prefix_mask")
+        }
+        generated = model.generate_cached(
+            generation_batch, tokenizer.eos_token_id, max_new_tokens=max_new_tokens
+        )
+        for index, ids in enumerate(generated):
             prediction = tokenizer.decode(ids, skip_special_tokens=True).strip()
             references = raw_batch["references"][index]
             predictions.append(prediction)
@@ -133,16 +138,15 @@ def evaluate_stage2(
             exact_scores.append(answer_exact_match(prediction, references))
             seen += 1
             progress.update(1)
-            del one, ids
             if seen >= max_examples:
                 break
-        del output, batch
+        del output, batch, generation_batch, generated
         if seen >= max_examples:
             break
     progress.close()
     model.train()
     metrics: dict[str, Any] = {
-        "val_loss": sum(losses) / max(1, len(losses)),
+        "val_loss": loss_sum / max(1, loss_examples),
         "examples": list(zip(primary_references[:5], predictions[:5], strict=True)),
     }
     if task == "transcription":
@@ -219,7 +223,11 @@ def run_stage2_training(
         collate_fn=collate_stage2_batch,
         pin_memory=True,
     )
-    val_loader = DataLoader(val_data, batch_size=1, collate_fn=collate_stage2_batch)
+    val_loader = DataLoader(
+        val_data,
+        batch_size=config.stage2_train.eval_batch_size,
+        collate_fn=collate_stage2_batch,
+    )
     params = _trainable_parameters(model)
     unwrapped_model = cast(AetherSpeechLLM, unwrap_model(model))
     optimizer = torch.optim.AdamW(

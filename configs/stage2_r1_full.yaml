@@ -42,6 +42,7 @@ stage2_train:
   eval_steps: []
   save_interval: 1000
   eval_max_examples: 256
+  eval_batch_size: 16
   generation_max_new_tokens: 256
   num_workers: 0
   seed: 1337

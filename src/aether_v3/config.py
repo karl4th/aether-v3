@@ -152,6 +152,7 @@ class Stage2TrainConfig:
     )
     save_interval: int = 250
     eval_max_examples: int = 64
+    eval_batch_size: int = 1
     generation_max_new_tokens: int = 64
     num_workers: int = 2
     seed: int = 1337

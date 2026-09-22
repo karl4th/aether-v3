@@ -533,6 +533,12 @@ on a 40 GB GPU. Evaluation runs every 1,000 steps on a fixed 256-example
 validation subset. WER is the primary selection and
 plateau metric; validation loss and CER remain independently checkpointed.
 
+Validation generation uses the same frozen Qwen model with batched KV cache.
+The notebook selects evaluation batch 16 on GPUs with at least 70 GB VRAM
+and batch 4 on a 40 GB GPU. A parity test compares a right-padded batch with
+separate single-example generation for different speech lengths and requires
+identical greedy token sequences.
+
 The plateau rule is fixed before the run:
 
 - significant improvement means at least `0.005` absolute WER;

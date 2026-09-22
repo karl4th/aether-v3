@@ -64,17 +64,18 @@ def _model_and_config():
     return model, cfg
 
 
-def _write_shard(path: Path):
+def _write_shard(path: Path, count: int = 1):
     path.mkdir(parents=True)
     records = [
         {
-            "sample_id": "q1",
-            "speech_states": torch.randn(4, 8),
-            "speech_length": 4,
+            "sample_id": f"q{index}",
+            "speech_states": torch.randn(4 + index, 8),
+            "speech_length": 4 + index,
             "prefix_ids": torch.tensor([3, 4]),
             "target_ids": torch.tensor([5, 2]),
             "references": ["answer"],
         }
+        for index in range(count)
     ]
     torch.save(records, path / "shard-000000.pt")
 
@@ -109,6 +110,23 @@ def test_complete_stage2_train_eval_checkpoint_and_resume(tmp_path):
     )
     checkpoint = torch.load(run / "last.pt", weights_only=False)
     assert checkpoint["step"] == 3
+
+
+def test_stage2_eval_supports_batched_generation(tmp_path):
+    train = tmp_path / "train"
+    validation = tmp_path / "validation"
+    _write_shard(train)
+    _write_shard(validation, count=2)
+    run = tmp_path / "run"
+    model, cfg = _model_and_config()
+    cfg.stage2_train.max_steps = 1
+    cfg.stage2_train.eval_batch_size = 2
+    cfg.stage2_train.eval_max_examples = 2
+
+    run_stage2_training(cfg, run, train, validation, model=model, tokenizer=TinyTokenizer())
+
+    checkpoint = torch.load(run / "last.pt", weights_only=False)
+    assert checkpoint["step"] == 1
 
 
 def test_output_scale_guard_aborts_and_saves_diagnostic_checkpoint(tmp_path):

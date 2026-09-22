@@ -186,3 +186,28 @@ def test_kv_cached_generation_matches_full_recomputation():
     cached = model.generate_cached(one, eos_token_id=-1, max_new_tokens=4, use_kv_cache=True)
     uncached = model.generate_cached(one, eos_token_id=-1, max_new_tokens=4, use_kv_cache=False)
     assert cached == uncached
+
+
+def test_batched_kv_generation_matches_individual_generation_with_padding():
+    model = _build_model()
+    model.eval()
+    batch = _batch()
+    with torch.no_grad():
+        states = model.encoder(batch["semantic_codes"], batch["speech_attention_mask"])
+    cached = {
+        "speech_states": states,
+        "speech_mask": batch["speech_attention_mask"],
+        "prefix_ids": batch["prefix_ids"],
+        "prefix_mask": batch["prefix_mask"],
+    }
+    batched = model.generate_cached(cached, eos_token_id=-1, max_new_tokens=4, use_kv_cache=True)
+    individual = [
+        model.generate_cached(
+            {key: value[index : index + 1] for key, value in cached.items()},
+            eos_token_id=-1,
+            max_new_tokens=4,
+            use_kv_cache=True,
+        )[0]
+        for index in range(2)
+    ]
+    assert batched == individual

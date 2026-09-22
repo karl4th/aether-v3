@@ -223,20 +223,16 @@ class AetherSpeechLLM(nn.Module):
         max_new_tokens: int = 64,
         use_kv_cache: bool = True,
     ) -> list[list[int]]:
-        """Greedy generation for cached speech states.
-
-        Evaluation intentionally uses batch size one. This keeps generation
-        independent of padding-side details while still exercising the exact
-        ``inputs_embeds`` path used during training.
-        """
-        if batch["speech_states"].shape[0] != 1:
-            raise ValueError("generate_cached currently requires batch_size=1")
+        """Greedy generation for a right-padded batch of cached speech states."""
+        batch_size = batch["speech_states"].shape[0]
+        if not use_kv_cache and batch_size != 1:
+            raise ValueError("Batched generation requires use_kv_cache=True")
         connector_dtype = next(self.connector.parameters()).dtype
         states = batch["speech_states"].to(connector_dtype)
         speech_embeds, speech_mask = self.connector(states, batch["speech_mask"])
 
-        empty_ids = torch.empty(1, 0, dtype=torch.long, device=states.device)
-        empty_mask = torch.empty(1, 0, dtype=torch.bool, device=states.device)
+        empty_ids = torch.empty(batch_size, 0, dtype=torch.long, device=states.device)
+        empty_mask = torch.empty(batch_size, 0, dtype=torch.bool, device=states.device)
         built = self.build_inputs_embeds(
             batch["prefix_ids"],
             batch["prefix_mask"],
@@ -247,14 +243,17 @@ class AetherSpeechLLM(nn.Module):
         )
         embeds = built.inputs_embeds
         attention_mask = built.attention_mask
-        generated: list[int] = []
+        prefix_lengths = attention_mask.sum(dim=1)
+        generated: list[list[int]] = [[] for _ in range(batch_size)]
+        active = torch.ones(batch_size, dtype=torch.bool, device=states.device)
         past_key_values = None
-        for _ in range(max_new_tokens):
+        last_tokens: torch.Tensor | None = None
+        for generation_step in range(max_new_tokens):
             position_ids = attention_mask.long().cumsum(-1) - 1
-            if use_kv_cache and past_key_values is not None:
-                token_tensor = torch.tensor([[generated[-1]]], device=embeds.device)
+            if past_key_values is not None:
+                assert last_tokens is not None
                 out = self.llm(
-                    input_ids=token_tensor,
+                    input_ids=last_tokens.unsqueeze(1),
                     attention_mask=attention_mask,
                     position_ids=position_ids[:, -1:],
                     past_key_values=past_key_values,
@@ -268,15 +267,29 @@ class AetherSpeechLLM(nn.Module):
                     use_cache=use_kv_cache,
                 )
             past_key_values = out.past_key_values if use_kv_cache else None
-            token = int(out.logits[0, -1].argmax())
-            if token == eos_token_id:
+            if generation_step == 0:
+                rows = torch.arange(batch_size, device=states.device)
+                next_logits = out.logits[rows, prefix_lengths - 1]
+            else:
+                next_logits = out.logits[:, -1]
+            next_tokens = next_logits.argmax(dim=-1)
+            token_values = next_tokens.detach().cpu().tolist()
+            active_values = active.detach().cpu().tolist()
+            for index, (token, is_active) in enumerate(
+                zip(token_values, active_values, strict=True)
+            ):
+                if is_active and token != eos_token_id:
+                    generated[index].append(token)
+            active = active & next_tokens.ne(eos_token_id)
+            if not bool(active.any().item()):
                 break
-            generated.append(token)
             if not use_kv_cache:
-                token_tensor = torch.tensor([[token]], device=embeds.device)
-                token_embed = self.llm.get_input_embeddings()(token_tensor).to(embeds.dtype)
+                token_embed = self.llm.get_input_embeddings()(next_tokens.unsqueeze(1)).to(
+                    embeds.dtype
+                )
                 embeds = torch.cat([embeds, token_embed], dim=1)
-            attention_mask = torch.cat(
-                [attention_mask, torch.ones(1, 1, dtype=torch.bool, device=embeds.device)], dim=1
+            last_tokens = torch.where(
+                active, next_tokens, torch.full_like(next_tokens, eos_token_id)
             )
-        return [generated]
+            attention_mask = torch.cat([attention_mask, active.unsqueeze(1)], dim=1)
+        return generated
