@@ -221,6 +221,7 @@ class AetherSpeechLLM(nn.Module):
         batch: dict[str, torch.Tensor],
         eos_token_id: int,
         max_new_tokens: int = 64,
+        use_kv_cache: bool = True,
     ) -> list[list[int]]:
         """Greedy generation for cached speech states.
 
@@ -247,21 +248,34 @@ class AetherSpeechLLM(nn.Module):
         embeds = built.inputs_embeds
         attention_mask = built.attention_mask
         generated: list[int] = []
+        past_key_values = None
         for _ in range(max_new_tokens):
             position_ids = attention_mask.long().cumsum(-1) - 1
-            out = self.llm(
-                inputs_embeds=embeds,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                use_cache=False,
-            )
+            if use_kv_cache and past_key_values is not None:
+                token_tensor = torch.tensor([[generated[-1]]], device=embeds.device)
+                out = self.llm(
+                    input_ids=token_tensor,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids[:, -1:],
+                    past_key_values=past_key_values,
+                    use_cache=True,
+                )
+            else:
+                out = self.llm(
+                    inputs_embeds=embeds,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    use_cache=use_kv_cache,
+                )
+            past_key_values = out.past_key_values if use_kv_cache else None
             token = int(out.logits[0, -1].argmax())
             if token == eos_token_id:
                 break
             generated.append(token)
-            token_tensor = torch.tensor([[token]], device=embeds.device)
-            token_embed = self.llm.get_input_embeddings()(token_tensor).to(embeds.dtype)
-            embeds = torch.cat([embeds, token_embed], dim=1)
+            if not use_kv_cache:
+                token_tensor = torch.tensor([[token]], device=embeds.device)
+                token_embed = self.llm.get_input_embeddings()(token_tensor).to(embeds.dtype)
+                embeds = torch.cat([embeds, token_embed], dim=1)
             attention_mask = torch.cat(
                 [attention_mask, torch.ones(1, 1, dtype=torch.bool, device=embeds.device)], dim=1
             )

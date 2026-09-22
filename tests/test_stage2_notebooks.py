@@ -1,3 +1,4 @@
+import ast
 import json
 from pathlib import Path
 
@@ -5,6 +6,7 @@ ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOKS = [
     ROOT / "notebooks" / "stage2_smoke_test.ipynb",
     ROOT / "notebooks" / "stage2_train.ipynb",
+    ROOT / "notebooks" / "stage2_phase0.ipynb",
 ]
 
 
@@ -22,7 +24,16 @@ def test_stage2_notebook_cells_compile_and_contain_no_literal_hf_token():
 def test_setup_imports_logging_before_using_it():
     for path in NOTEBOOKS:
         notebook = json.loads(path.read_text())
-        setup = "".join(notebook["cells"][1]["source"])
-        assert setup.index("import os, subprocess, sys, logging") < setup.index(
-            "logging.basicConfig"
+        setup = next(
+            "".join(cell["source"])
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code" and "logging.basicConfig" in "".join(cell["source"])
         )
+        tree = ast.parse(setup)
+        import_line = min(
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import) and any(alias.name == "logging" for alias in node.names)
+        )
+        basic_config_line = setup[: setup.index("logging.basicConfig")].count("\n") + 1
+        assert import_line < basic_config_line

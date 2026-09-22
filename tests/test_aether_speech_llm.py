@@ -169,3 +169,20 @@ def test_forward_cached_casts_fp16_states_to_connector_dtype():
     }
     out = model.forward_cached(cached_batch)
     assert torch.isfinite(out.loss)
+
+
+def test_kv_cached_generation_matches_full_recomputation():
+    model = _build_model()
+    model.eval()
+    batch = _batch()
+    with torch.no_grad():
+        states = model.encoder(batch["semantic_codes"], batch["speech_attention_mask"])
+    one = {
+        "speech_states": states[:1],
+        "speech_mask": batch["speech_attention_mask"][:1],
+        "prefix_ids": batch["prefix_ids"][:1],
+        "prefix_mask": batch["prefix_mask"][:1],
+    }
+    cached = model.generate_cached(one, eos_token_id=-1, max_new_tokens=4, use_kv_cache=True)
+    uncached = model.generate_cached(one, eos_token_id=-1, max_new_tokens=4, use_kv_cache=False)
+    assert cached == uncached

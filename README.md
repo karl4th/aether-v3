@@ -115,8 +115,10 @@ the private secret `HF_TOKEN`.
 
 Run these notebooks in order:
 
-1. `notebooks/stage2_smoke_test.ipynb` — mandatory Phase 0 engineering
-   harness with Qwen3-0.6B and direct speech-to-transcript generation.
+1. `notebooks/stage2_phase0.ipynb` — complete mandatory Phase 0 engineering
+   harness with Qwen3-0.6B: embedding statistics, forward/backward and mask
+   checks, text-only KV-cache parity, speech generation, live-vs-cache
+   integrity, and a 100-step run on 128 examples.
 2. `notebooks/stage2_train.ipynb` — Phase 1 tiny overfit on exactly 64
    transcription examples with Qwen3-4B. Run only after Phase 0 passes.
 

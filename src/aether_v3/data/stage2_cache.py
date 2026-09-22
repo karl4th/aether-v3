@@ -194,6 +194,7 @@ def build_limmim_stage2_shards(
                     "sample_id": f"{role}_{written + len(records):08d}",
                     "speech_states": states[index, :length].clone(),
                     "speech_length": length,
+                    "semantic_codes": torch.tensor(row["semantic_codes"], dtype=torch.long),
                     "prefix_ids": prefix_ids.clone(),
                     "target_ids": torch.tensor(target_ids, dtype=torch.long),
                     "references": [transcript],

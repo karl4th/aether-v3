@@ -8,7 +8,7 @@ import logging
 import subprocess
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch.utils.data import DataLoader
@@ -19,6 +19,7 @@ from aether_v3.data.stage2_collate import collate_stage2_batch
 from aether_v3.data.stage2_dataset import Stage2ShardDataset
 from aether_v3.eval.metrics import compute_cer, compute_wer
 from aether_v3.models.aether_speech_llm import AetherSpeechLLM
+from aether_v3.training.dist_utils import unwrap_model
 from aether_v3.training.scheduler import build_scheduler
 from aether_v3.training.stage2_utils import (
     answer_exact_match,
@@ -139,6 +140,7 @@ def run_stage2_training(
     )
     val_loader = DataLoader(val_data, batch_size=1, collate_fn=collate_stage2_batch)
     params = _trainable_parameters(model)
+    unwrapped_model = cast(AetherSpeechLLM, unwrap_model(model))
     optimizer = torch.optim.AdamW(
         params, lr=config.stage2_train.lr, weight_decay=config.stage2_train.weight_decay
     )
@@ -246,7 +248,9 @@ def run_stage2_training(
             loss = output.loss / config.stage2_train.grad_accum_steps
             loss.backward()
             running += float(loss.detach())
-        torch.nn.utils.clip_grad_norm_(params, config.stage2_train.grad_clip_norm)
+        grad_norm = float(
+            torch.nn.utils.clip_grad_norm_(params, config.stage2_train.grad_clip_norm)
+        )
         optimizer.step()
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)
@@ -259,9 +263,15 @@ def run_stage2_training(
                 "lr": scheduler.get_last_lr()[0],
                 "elapsed_seconds": time.time() - started,
                 "steps_per_second": step / max(time.time() - started, 1e-9),
+                "grad_norm": grad_norm,
+                "bridge_output_scale": float(
+                    unwrapped_model.connector.bridge.output_scale.detach()
+                ),
             }
             if device.type == "cuda":
+                record["gpu_allocated_gb"] = torch.cuda.memory_allocated() / 2**30
                 record["gpu_memory_gb"] = torch.cuda.max_memory_allocated() / 2**30
+                record["gpu_reserved_gb"] = torch.cuda.memory_reserved() / 2**30
             append_jsonl(run_dir / "log.jsonl", record)
             logger.info("%s", record)
             running = 0.0
