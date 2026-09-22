@@ -33,7 +33,12 @@ import torchaudio
 from datasets import load_from_disk
 
 from aether_v3.data.tokenizer import byte_ids_to_text
-from aether_v3.training.stage2_utils import answer_strings, first_answer, qa_prefix
+from aether_v3.training.stage2_utils import (
+    answer_strings,
+    first_answer,
+    qa_prefix,
+    transcription_prefix,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +131,91 @@ def save_stage2_cache(records: list[dict[str, Any]], path: str | Path) -> None:
 
 def load_stage2_cache(path: str | Path) -> list[dict[str, Any]]:
     return torch.load(str(path), weights_only=False)
+
+
+def build_limmim_stage2_shards(
+    rows: Any,
+    encoder: nn.Module,
+    tokenizer: Stage2Tokenizer,
+    output_dir: str | Path,
+    role: str,
+    device: str = "cuda",
+    encode_batch_size: int = 32,
+    shard_size: int = 512,
+    max_examples: int | None = None,
+) -> int:
+    """Cache frozen Stage 1 states and transcript targets from ``karl4th/limmim``."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    encoder = encoder.to(device).eval()
+    existing_paths = sorted(output_dir.glob("shard-*.pt"))
+    written = sum(len(load_stage2_cache(path)) for path in existing_paths)
+    rows_to_skip = written
+    records: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+    prefix_ids = torch.tensor(
+        tokenizer(transcription_prefix(), add_special_tokens=False)["input_ids"], dtype=torch.long
+    )
+
+    def flush() -> None:
+        nonlocal records, written
+        if not records:
+            return
+        path = output_dir / f"shard-{written // shard_size:06d}.pt"
+        if not path.exists():
+            torch.save(records, path)
+        written += len(records)
+        records = []
+
+    def process_pending() -> None:
+        nonlocal pending
+        if not pending:
+            return
+        lengths = [len(row["semantic_codes"]) for row in pending]
+        max_length = max(lengths)
+        codes = torch.zeros(len(pending), max_length, dtype=torch.long, device=device)
+        mask = torch.zeros_like(codes, dtype=torch.bool)
+        for index, row in enumerate(pending):
+            length = lengths[index]
+            codes[index, :length] = torch.tensor(
+                row["semantic_codes"], dtype=torch.long, device=device
+            )
+            mask[index, :length] = True
+        with torch.no_grad():
+            states = encoder(codes, mask).to("cpu", dtype=torch.float16)
+        for index, row in enumerate(pending):
+            transcript = byte_ids_to_text(row["byte_target"])
+            target_ids = tokenizer(transcript, add_special_tokens=False)["input_ids"] + [
+                tokenizer.eos_token_id
+            ]
+            length = lengths[index]
+            records.append(
+                {
+                    "sample_id": f"{role}_{written + len(records):08d}",
+                    "speech_states": states[index, :length].clone(),
+                    "speech_length": length,
+                    "prefix_ids": prefix_ids.clone(),
+                    "target_ids": torch.tensor(target_ids, dtype=torch.long),
+                    "references": [transcript],
+                }
+            )
+            if len(records) >= shard_size:
+                flush()
+        pending = []
+        logger.info("%s cache: encoded %d examples", role, written + len(records))
+
+    for row_index, row in enumerate(rows):
+        if row_index < rows_to_skip:
+            continue
+        if max_examples is not None and written + len(records) + len(pending) >= max_examples:
+            break
+        pending.append(row)
+        if len(pending) >= encode_batch_size:
+            process_pending()
+    process_pending()
+    flush()
+    logger.info("%s cache complete: %d examples", role, written)
+    return written
 
 
 def build_slue_sqa5_shards(

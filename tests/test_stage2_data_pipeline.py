@@ -16,6 +16,7 @@ from datasets import Dataset
 from aether_v3.config import AetherSpeechConfig, DataConfig
 from aether_v3.data.stage1_eval_manifest import filter_rows_by_duration, verify_byte_alignment
 from aether_v3.data.stage2_cache import (
+    build_limmim_stage2_shards,
     build_slue_sqa5_shards,
     build_stage2_cache,
     load_stage2_cache,
@@ -203,3 +204,31 @@ def test_slue_builder_resamples_before_calling_current_mimi_api(tmp_path):
     )
     assert count == 1
     assert len(load_stage2_cache(tmp_path / "shard-000000.pt")) == 1
+
+
+def test_limmim_builder_creates_transcription_records(tmp_path):
+    speech_cfg = AetherSpeechConfig(
+        semantic_vocab_size=16,
+        hidden_size=8,
+        num_layers=1,
+        num_heads=2,
+        ffn_size=16,
+        dropout=0.0,
+    )
+    rows = [
+        {"semantic_codes": [1, 2, 3], "byte_target": text_to_byte_ids("HELLO")},
+        {"semantic_codes": [4, 5], "byte_target": text_to_byte_ids("WORLD")},
+    ]
+    count = build_limmim_stage2_shards(
+        rows,
+        AetherSpeechEncoder(speech_cfg),
+        _FakeTokenizer(),
+        tmp_path,
+        "train",
+        device="cpu",
+        encode_batch_size=2,
+    )
+    records = load_stage2_cache(tmp_path / "shard-000000.pt")
+    assert count == 2
+    assert [record["references"] for record in records] == [["HELLO"], ["WORLD"]]
+    assert all(record["speech_states"].shape[-1] == 8 for record in records)

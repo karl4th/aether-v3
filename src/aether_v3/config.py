@@ -128,14 +128,14 @@ class Stage2DataConfig:
     train_split: str = "train"
     validation_split: str = "validation"
     test_split: str = "test"
-    task: str = "spoken_question_text_document_qa"
+    task: str = "transcription"
     max_audio_seconds: float = 30.0
     cache_dir: str = "data_cache/stage2"
 
 
 @dataclasses.dataclass
 class Stage2TrainConfig:
-    drive_root: str = "/content/drive/MyDrive/aether-v2/stage2"
+    drive_root: str = "/content/drive/MyDrive/aether-v3/stage2"
     batch_size: int = 1
     grad_accum_steps: int = 16
     max_steps: int = 5_000
@@ -146,6 +146,9 @@ class Stage2TrainConfig:
     grad_clip_norm: float = 1.0
     log_interval: int = 10
     eval_interval: int = 250
+    eval_steps: list[int] = dataclasses.field(
+        default_factory=lambda: [0, 500, 1000, 2000, 3000, 5000]
+    )
     save_interval: int = 250
     eval_max_examples: int = 64
     generation_max_new_tokens: int = 64

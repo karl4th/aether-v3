@@ -18,15 +18,15 @@ llm:
   frozen: true
   dtype: bfloat16
 stage2_data:
-  dataset_id: asapp/slue-phase-2
-  dataset_config: sqa5
+  dataset_id: karl4th/limmim
+  dataset_config: default
   train_split: train
   validation_split: validation
   test_split: test
-  task: spoken_question_text_document_qa
+  task: transcription
   cache_dir: data_cache/stage2
 stage2_train:
-  drive_root: /content/drive/MyDrive/aether-v2/stage2
+  drive_root: /content/drive/MyDrive/aether-v3/stage2
   batch_size: 1
   grad_accum_steps: 16
   max_steps: 5000
@@ -37,6 +37,7 @@ stage2_train:
   grad_clip_norm: 1.0
   log_interval: 10
   eval_interval: 250
+  eval_steps: [0, 500, 1000, 2000, 3000, 5000]
   save_interval: 250
   eval_max_examples: 64
   generation_max_new_tokens: 64

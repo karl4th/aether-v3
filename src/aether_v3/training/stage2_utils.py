@@ -51,6 +51,10 @@ def qa_prefix(document: str) -> str:
     )
 
 
+def transcription_prefix() -> str:
+    return "Transcribe the following speech exactly. Output only the transcript:\n"
+
+
 def answer_strings(answer_spans: Any) -> list[str]:
     """Normalize both HF Sequence layouts used by different datasets versions."""
     if isinstance(answer_spans, dict):

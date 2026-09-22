@@ -89,8 +89,8 @@ def test_complete_stage2_train_eval_checkpoint_and_resume(tmp_path):
     for name in (
         "last.pt",
         "best_val_loss.pt",
-        "best_answer_f1.pt",
-        "best_exact_match.pt",
+        "best_wer.pt",
+        "best_cer.pt",
     ):
         assert (run / name).exists()
     assert (run / "periodic" / "step_000002.pt").exists()
