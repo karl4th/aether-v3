@@ -1,0 +1,62 @@
+connector:
+  resampler:
+    enabled: false
+    ratio: 1
+    num_heads: 12
+    ffn_size: 3072
+    dropout: 0.0
+    conv_kernel: 5
+  bridge:
+    input_dim: 768
+    intermediate_dim: 3072
+    output_dim: 2560
+    dropout: 0.1
+    # Replaced by the weights-only R1 smoke initialization.
+    init_output_scale: 0.02
+llm:
+  model_id: Qwen/Qwen3-4B
+  revision: main
+  frozen: true
+  dtype: bfloat16
+stage2_data:
+  dataset_id: karl4th/limmim
+  dataset_config: default
+  train_split: train
+  validation_split: validation
+  test_split: test
+  task: transcription
+  cache_dir: /content/drive/MyDrive/aether-v3/stage2/cache-r1-full
+stage2_train:
+  drive_root: /content/drive/MyDrive/aether-v3/stage2
+  batch_size: 2
+  grad_accum_steps: 8
+  max_steps: 100000
+  warmup_steps: 2000
+  lr: 1.0e-4
+  min_lr_ratio: 0.1
+  weight_decay: 0.01
+  grad_clip_norm: 1.0
+  log_interval: 10
+  show_progress_bar: true
+  eval_interval: 2500
+  eval_steps: []
+  save_interval: 2500
+  eval_max_examples: 512
+  generation_max_new_tokens: 256
+  num_workers: 0
+  seed: 1337
+  amp_dtype: bfloat16
+  stage1_repo_id: manifestro/aetherASR-EN-v0.1
+  stage1_filename: last.pt
+  stage1_revision: main
+  init_trainable_from: null
+  # The R1 smoke ended near 0.102. Warn on continued growth, but abort only
+  # on a clearly invalid magnitude or a discontinuous single-step jump.
+  output_scale_warn_max: 0.20
+  output_scale_abort_max: 1.0
+  output_scale_abort_step_delta: 0.05
+  plateau_enabled: true
+  plateau_metric: wer
+  plateau_min_delta: 0.005
+  plateau_patience_evals: 3
+  plateau_start_step: 2500

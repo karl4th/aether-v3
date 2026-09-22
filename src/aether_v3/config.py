@@ -145,6 +145,7 @@ class Stage2TrainConfig:
     weight_decay: float = 0.01
     grad_clip_norm: float = 1.0
     log_interval: int = 10
+    show_progress_bar: bool = True
     eval_interval: int = 250
     eval_steps: list[int] = dataclasses.field(
         default_factory=lambda: [0, 500, 1000, 2000, 3000, 5000]
@@ -159,7 +160,17 @@ class Stage2TrainConfig:
     stage1_filename: str = "last.pt"
     stage1_revision: str = "main"
     resume_from: str | None = None
+    # Weights-only initialization for a new experiment. Unlike resume_from,
+    # this deliberately starts a fresh optimizer, scheduler, and step counter.
+    init_trainable_from: str | None = None
     output_scale_abort_max: float | None = None
+    output_scale_warn_max: float | None = None
+    output_scale_abort_step_delta: float | None = None
+    plateau_enabled: bool = False
+    plateau_metric: str = "wer"
+    plateau_min_delta: float = 0.005
+    plateau_patience_evals: int = 3
+    plateau_start_step: int | None = None
 
 
 @dataclasses.dataclass

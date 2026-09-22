@@ -126,3 +126,60 @@ def test_output_scale_guard_aborts_and_saves_diagnostic_checkpoint(tmp_path):
     checkpoint = torch.load(run / "abort_output_scale.pt", weights_only=False)
     assert checkpoint["step"] == 0
     assert '"reason": "bridge_output_scale_guard"' in (run / "log.jsonl").read_text()
+
+
+def test_weights_only_initialization_records_provenance_and_starts_at_zero(tmp_path):
+    train = tmp_path / "train"
+    validation = tmp_path / "validation"
+    _write_shard(train)
+    _write_shard(validation)
+
+    source_run = tmp_path / "source"
+    source_model, source_cfg = _model_and_config()
+    source_cfg.stage2_train.max_steps = 1
+    run_stage2_training(
+        source_cfg, source_run, train, validation, model=source_model, tokenizer=TinyTokenizer()
+    )
+
+    target_run = tmp_path / "target"
+    target_model, target_cfg = _model_and_config()
+    target_cfg.stage2_train.max_steps = 1
+    target_cfg.stage2_train.init_trainable_from = str(source_run / "last.pt")
+    run_stage2_training(
+        target_cfg, target_run, train, validation, model=target_model, tokenizer=TinyTokenizer()
+    )
+
+    checkpoint = torch.load(target_run / "last.pt", weights_only=False)
+    provenance = checkpoint["provenance"]
+    assert checkpoint["step"] == 1
+    assert provenance["init_trainable_source_step"] == 1
+    assert provenance["init_trainable_from"] == str(source_run / "last.pt")
+    assert len(provenance["init_trainable_sha256"]) == 64
+
+
+def test_validation_plateau_stops_and_writes_report(tmp_path):
+    train = tmp_path / "train"
+    validation = tmp_path / "validation"
+    _write_shard(train)
+    _write_shard(validation)
+    run = tmp_path / "run"
+    model, cfg = _model_and_config()
+    cfg.stage2_train.max_steps = 10
+    cfg.stage2_train.eval_steps = []
+    cfg.stage2_train.eval_interval = 1
+    cfg.stage2_train.warmup_steps = 0
+    cfg.stage2_train.plateau_enabled = True
+    cfg.stage2_train.plateau_metric = "wer"
+    cfg.stage2_train.plateau_min_delta = 0.005
+    cfg.stage2_train.plateau_patience_evals = 2
+    cfg.stage2_train.plateau_start_step = 0
+
+    run_stage2_training(cfg, run, train, validation, model=model, tokenizer=TinyTokenizer())
+
+    report = __import__("json").loads((run / "plateau_report.json").read_text())
+    summary = __import__("json").loads((run / "training_summary.json").read_text())
+    checkpoint = torch.load(run / "plateau_stop.pt", weights_only=False)
+    assert report["reason"] == "validation_plateau"
+    assert report["step"] == 2
+    assert checkpoint["step"] == 2
+    assert summary["status"] == "stopped_early"

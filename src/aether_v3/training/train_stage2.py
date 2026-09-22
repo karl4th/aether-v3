@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
+import hashlib
 import json
 import logging
 import math
@@ -13,6 +15,7 @@ from typing import Any, cast
 
 import torch
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 from transformers import AutoTokenizer
 
 from aether_v3.config import ExperimentConfig
@@ -47,6 +50,38 @@ def _git_commit() -> str:
 
 def _trainable_parameters(model: torch.nn.Module):
     return [parameter for parameter in model.parameters() if parameter.requires_grad]
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_stage2_trainable_weights(
+    model: AetherSpeechLLM, checkpoint_path: str | Path, device: torch.device | str
+) -> dict[str, Any]:
+    """Load only trainable Stage 2 weights, leaving optimizer/schedule fresh."""
+    path = Path(checkpoint_path)
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+    source = checkpoint.get("trainable_model")
+    if not isinstance(source, dict):
+        raise ValueError(f"Checkpoint has no trainable_model mapping: {path}")
+    named = dict(model.named_parameters())
+    expected = {name for name, parameter in named.items() if parameter.requires_grad}
+    supplied = set(source)
+    missing = expected - supplied
+    unexpected = supplied - set(named)
+    if missing or unexpected:
+        raise ValueError(
+            f"Incompatible trainable weights: missing={sorted(missing)}, "
+            f"unexpected={sorted(unexpected)}"
+        )
+    for name, value in source.items():
+        named[name].data.copy_(value.to(device=device, dtype=named[name].dtype))
+    return checkpoint
 
 
 @torch.no_grad()
@@ -130,6 +165,20 @@ def run_stage2_training(
     llm_dtype = next(model.llm.parameters()).dtype
     model.connector.to(dtype=llm_dtype)
 
+    init_checkpoint: dict[str, Any] | None = None
+    init_path: Path | None = None
+    if config.stage2_train.init_trainable_from:
+        if config.stage2_train.resume_from:
+            raise ValueError("Set only one of init_trainable_from and resume_from")
+        init_path = Path(config.stage2_train.init_trainable_from)
+        init_checkpoint = load_stage2_trainable_weights(model, init_path, device)
+        logger.info(
+            "initialized trainable weights from %s at source step %s; "
+            "optimizer and scheduler are fresh",
+            init_path,
+            init_checkpoint.get("step", "unknown"),
+        )
+
     train_data = Stage2ShardDataset(train_cache_dir, shuffle=True, seed=config.stage2_train.seed)
     val_data = Stage2ShardDataset(validation_cache_dir, shuffle=False)
     train_loader = DataLoader(
@@ -151,7 +200,7 @@ def run_stage2_training(
         config.stage2_train.max_steps,
         config.stage2_train.min_lr_ratio,
     )
-    provenance = {
+    provenance: dict[str, Any] = {
         "git_commit": _git_commit(),
         "llm_model_id": config.llm.model_id,
         "llm_revision": config.llm.revision,
@@ -160,6 +209,11 @@ def run_stage2_training(
         "dataset_id": config.stage2_data.dataset_id,
         "dataset_config": config.stage2_data.dataset_config,
     }
+    if init_path is not None and init_checkpoint is not None:
+        provenance["init_trainable_from"] = str(init_path)
+        provenance["init_trainable_sha256"] = _sha256(init_path)
+        provenance["init_trainable_source_step"] = init_checkpoint.get("step")
+        provenance["init_trainable_source_provenance"] = init_checkpoint.get("provenance", {})
     config_dict = dataclasses.asdict(config)
     (run_dir / "config.json").write_text(json.dumps(config_dict, indent=2))
     (run_dir / "provenance.json").write_text(json.dumps(provenance, indent=2))
@@ -184,10 +238,36 @@ def run_stage2_training(
         step = int(checkpoint["step"])
         best.update(checkpoint.get("metrics", {}))
 
+    previous_output_scale: float | None = None
+    scale_warning_emitted = False
+
     def enforce_output_scale_guard(current_step: int) -> float:
+        nonlocal previous_output_scale, scale_warning_emitted
         output_scale = float(unwrapped_model.connector.bridge.output_scale.detach())
         abort_max = config.stage2_train.output_scale_abort_max
-        if math.isfinite(output_scale) and (abort_max is None or abs(output_scale) <= abort_max):
+        abort_delta = config.stage2_train.output_scale_abort_step_delta
+        step_delta = (
+            abs(output_scale - previous_output_scale) if previous_output_scale is not None else 0.0
+        )
+        safe = (
+            math.isfinite(output_scale)
+            and (abort_max is None or abs(output_scale) <= abort_max)
+            and (abort_delta is None or step_delta <= abort_delta)
+        )
+        if safe:
+            warn_max = config.stage2_train.output_scale_warn_max
+            if warn_max is not None and abs(output_scale) > warn_max and not scale_warning_emitted:
+                warning = {
+                    "step": current_step,
+                    "status": "warning",
+                    "reason": "bridge_output_scale_warning",
+                    "bridge_output_scale": output_scale,
+                    "output_scale_warn_max": warn_max,
+                }
+                append_jsonl(run_dir / "log.jsonl", warning)
+                logger.warning("%s", warning)
+                scale_warning_emitted = True
+            previous_output_scale = output_scale
             return output_scale
         reason = {
             "step": current_step,
@@ -195,6 +275,8 @@ def run_stage2_training(
             "reason": "bridge_output_scale_guard",
             "bridge_output_scale": output_scale,
             "output_scale_abort_max": abort_max,
+            "bridge_output_scale_step_delta": step_delta,
+            "output_scale_abort_step_delta": abort_delta,
         }
         append_jsonl(run_dir / "log.jsonl", reason)
         save_stage2_checkpoint(
@@ -222,7 +304,13 @@ def run_stage2_training(
     running = 0.0
     started = time.time()
 
-    def run_evaluation(current_step: int) -> None:
+    plateau_metric = config.stage2_train.plateau_metric
+    plateau_best: float | None = None
+    plateau_bad_evals = 0
+    plateau_history: list[dict[str, Any]] = []
+
+    def run_evaluation(current_step: int) -> bool:
+        nonlocal plateau_best, plateau_bad_evals
         metrics = evaluate_stage2(
             model,
             val_loader,
@@ -263,9 +351,73 @@ def run_stage2_training(
                 )
                 logger.info("saved best_%s.pt at step %d", metric, current_step)
 
-    if step == 0 and 0 in config.stage2_train.eval_steps:
+        if not config.stage2_train.plateau_enabled:
+            return False
+        if plateau_metric not in metrics:
+            raise ValueError(f"Plateau metric {plateau_metric!r} is absent from evaluation")
+        plateau_start = (
+            config.stage2_train.plateau_start_step
+            if config.stage2_train.plateau_start_step is not None
+            else config.stage2_train.warmup_steps
+        )
+        value = float(metrics[plateau_metric])
+        entry = {"step": current_step, "value": value, "eligible": current_step >= plateau_start}
+        plateau_history.append(entry)
+        if current_step < plateau_start:
+            plateau_best = value if plateau_best is None else min(plateau_best, value)
+            entry["significant_best"] = plateau_best
+            entry["consecutive_without_min_delta"] = 0
+            return False
+        if plateau_best is None or plateau_best - value >= config.stage2_train.plateau_min_delta:
+            plateau_best = value
+            plateau_bad_evals = 0
+        else:
+            plateau_bad_evals += 1
+        entry["significant_best"] = plateau_best
+        entry["consecutive_without_min_delta"] = plateau_bad_evals
+        if plateau_bad_evals < config.stage2_train.plateau_patience_evals:
+            return False
+
+        report = {
+            "status": "stopped",
+            "reason": "validation_plateau",
+            "step": current_step,
+            "metric": plateau_metric,
+            "min_delta": config.stage2_train.plateau_min_delta,
+            "patience_evals": config.stage2_train.plateau_patience_evals,
+            "plateau_start_step": plateau_start,
+            "best_significant_value": plateau_best,
+            "current_value": value,
+            "history": plateau_history,
+        }
+        (run_dir / "plateau_report.json").write_text(json.dumps(report, indent=2))
+        append_jsonl(run_dir / "log.jsonl", report)
+        save_stage2_checkpoint(
+            run_dir / "plateau_stop.pt",
+            model,
+            optimizer,
+            scheduler,
+            current_step,
+            best,
+            config_dict,
+            provenance,
+        )
+        logger.warning("%s", report)
+        return True
+
+    if step == 0 and (0 in config.stage2_train.eval_steps or not config.stage2_train.eval_steps):
         logger.info("running mandatory eval@step0")
         run_evaluation(0)
+    stopped_for_plateau = False
+    start_step = step
+    progress = tqdm(
+        total=config.stage2_train.max_steps,
+        initial=step,
+        desc="Stage 2 train",
+        unit="step",
+        disable=not config.stage2_train.show_progress_bar,
+        dynamic_ncols=True,
+    )
     while step < config.stage2_train.max_steps:
         for _ in range(config.stage2_train.grad_accum_steps):
             try:
@@ -288,16 +440,28 @@ def run_stage2_training(
         scheduler.step()
         optimizer.zero_grad(set_to_none=True)
         step += 1
+        progress.update(1)
 
         output_scale = enforce_output_scale_guard(step)
 
         if step % config.stage2_train.log_interval == 0:
+            elapsed = time.time() - started
+            completed_this_run = step - start_step
+            steps_per_second = completed_this_run / max(elapsed, 1e-9)
+            remaining_steps = config.stage2_train.max_steps - step
+            eta_seconds = remaining_steps / max(steps_per_second, 1e-9)
             record = {
                 "step": step,
                 "train_loss": running / config.stage2_train.log_interval,
                 "lr": scheduler.get_last_lr()[0],
-                "elapsed_seconds": time.time() - started,
-                "steps_per_second": step / max(time.time() - started, 1e-9),
+                "elapsed_seconds": elapsed,
+                "steps_per_second": steps_per_second,
+                "remaining_steps": remaining_steps,
+                "progress_percent": 100.0 * step / config.stage2_train.max_steps,
+                "eta_seconds": eta_seconds,
+                "estimated_completion_utc": (
+                    dt.datetime.now(dt.UTC) + dt.timedelta(seconds=eta_seconds)
+                ).isoformat(),
                 "grad_norm": grad_norm,
                 "bridge_output_scale": output_scale,
             }
@@ -307,12 +471,17 @@ def run_stage2_training(
                 record["gpu_reserved_gb"] = torch.cuda.memory_reserved() / 2**30
             append_jsonl(run_dir / "log.jsonl", record)
             logger.info("%s", record)
+            progress.set_postfix(
+                loss=f"{record['train_loss']:.4f}",
+                scale=f"{output_scale:.4f}",
+                remaining=remaining_steps,
+            )
             running = 0.0
 
         if step in config.stage2_train.eval_steps or (
             not config.stage2_train.eval_steps and step % config.stage2_train.eval_interval == 0
         ):
-            run_evaluation(step)
+            stopped_for_plateau = run_evaluation(step)
         if step % config.stage2_train.save_interval == 0:
             save_stage2_checkpoint(
                 run_dir / "last.pt",
@@ -335,7 +504,18 @@ def run_stage2_training(
                 config_dict,
                 provenance,
             )
+        if stopped_for_plateau:
+            break
+    progress.close()
     save_stage2_checkpoint(
         run_dir / "last.pt", model, optimizer, scheduler, step, best, config_dict, provenance
     )
+    completion = {
+        "status": "stopped_early" if stopped_for_plateau else "completed",
+        "reason": "validation_plateau" if stopped_for_plateau else "max_steps",
+        "step": step,
+        "max_steps": config.stage2_train.max_steps,
+        "best": best,
+    }
+    (run_dir / "training_summary.json").write_text(json.dumps(completion, indent=2))
     return run_dir

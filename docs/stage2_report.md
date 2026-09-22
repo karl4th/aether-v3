@@ -497,20 +497,38 @@ not compensate for the large information loss and lower throughput.
 These smoke experiments answer the temporal-rate preflight question, but
 they do not close the revised Phase 2A research question or Stage 2 itself.
 
-## 19. Next planned phase
+## 19. Full frozen-R1 plan
 
-Under the original frozen specification, the next phase after selecting the
-temporal configuration was Phase 3: R1 Connector plus LoRA on the upper
-Qwen3-4B attention projections. The original sequence then called for
-selective AetherSpeech unfreezing if needed, followed by full LibriSpeech
-training, optional text-teacher distillation, final transcription evaluation,
-and a separate semantic speech-understanding track.
+The selected next experiment is a full frozen-Qwen R1 baseline on
+LibriSpeech `train-clean-100 + train-clean-360`. LoRA is deferred until the
+frozen Connector reaches a measured validation plateau. Selective upper
+AetherSpeech unfreezing is deferred until a later LoRA run also reaches a
+plateau.
 
-The experiment plan is now under review. Two evidence-supported options are:
+`stage2_r1_full.ipynb` initializes the Connector from the best R1 smoke WER
+checkpoint but intentionally creates a new optimizer, scheduler, and step
+counter. The source path, SHA-256, source step, and source provenance are
+stored with the new run. Training and validation use distinct dataset
+splits, and all examples inside each split are cached; the full run does not
+reuse the bounded 4,096/256 smoke subsets.
 
-1. run a bounded R1+LoRA probe before scaling; or
-2. establish a clean frozen-Qwen R1 baseline on full LibriSpeech
-   `train.100 + train.360`, then measure the incremental value of LoRA.
+The hard ceiling is 100,000 optimizer steps at effective batch 16, or about
+1.6 million example presentations. Evaluation runs every 2,500 steps on a
+fixed 512-example validation subset. WER is the primary selection and
+plateau metric; validation loss and CER remain independently checkpointed.
 
-No new Phase 2A notebook is defined by this report; its design will be
-recorded separately after the revised objective and gate are chosen.
+The plateau rule is fixed before the run:
+
+- significant improvement means at least `0.005` absolute WER;
+- plateau counting begins after warmup, at step 2,500;
+- three consecutive eligible evaluations without significant improvement
+  stop training;
+- the stop writes `plateau_report.json`, `plateau_stop.pt`, `last.pt`, and
+  `training_summary.json`.
+
+The old output-scale abort threshold of `0.12` is retired because the valid
+R1 smoke ended at `0.1016`. The full run warns once above `0.20`, aborts on a
+non-finite value, an absolute magnitude above `1.0`, or a single-step change
+above `0.05`, and saves `abort_output_scale.pt` on failure. This permits
+gradual learned rescaling while retaining protection against discontinuous
+failure.
