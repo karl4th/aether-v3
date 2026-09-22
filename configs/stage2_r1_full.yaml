@@ -19,13 +19,13 @@ llm:
   frozen: true
   dtype: bfloat16
 stage2_data:
-  dataset_id: karl4th/limmim-v2
+  dataset_id: karl4th/limmim-v2-en
   dataset_config: default
   train_split: train
   validation_split: validation
   test_split: test
   task: transcription
-  cache_dir: /content/drive/MyDrive/aether-v3/stage2/cache-r1-full-v2
+  cache_dir: /content/drive/MyDrive/aether-v3/stage2/cache-r1-full-v2-en
 stage2_train:
   drive_root: /content/drive/MyDrive/aether-v3/stage2
   batch_size: 2

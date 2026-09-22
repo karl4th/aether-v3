@@ -518,7 +518,7 @@ It writes exact transcripts, q0 semantic codes, UTF-8 byte targets, source
 metadata, and split provenance into restartable Parquet shards. The
 expected counts are 132,553 train, 2,703 validation, and 2,620 test.
 
-`stage2_r1_full.ipynb` consumes `karl4th/limmim-v2` and initializes the
+`stage2_r1_full.ipynb` consumes `karl4th/limmim-v2-en` and initializes the
 Connector from the best R1 smoke WER checkpoint but intentionally creates
 a new optimizer, scheduler, and step counter. The source path, SHA-256,
 source step, and source provenance are stored with the new run. Training
