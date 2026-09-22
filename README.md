@@ -78,11 +78,11 @@ result it actually needs to keep (semantic codes + byte targets) is only
 ~100-150MB, and extraction is CPU-decode-bound - it doesn't benefit from a
 strong GPU. So the notebook workflow is split in two:
 
-- `notebooks/prepare_data.ipynb` — run once on a cheap **T4** runtime.
+- `notebooks/stage1/prepare_data.ipynb` — run once on a cheap **T4** runtime.
   Downloads LibriSpeech, runs `prepare_cache`, and mirrors just the small
   extracted cache (not the raw audio) to Google Drive via
   `aether_v3.data.cache_sync`.
-- `notebooks/train_ctc.ipynb` — run on a stronger GPU (A100/L4). Restores
+- `notebooks/stage1/train_ctc.ipynb` — run on a stronger GPU (A100/L4). Restores
   that cache from Drive in seconds (raises with a clear message if it's
   missing, rather than silently re-extracting on the expensive tier) and
   trains. Checkpoints/logs (`train.output_dir`) are written straight to
@@ -115,11 +115,11 @@ the private secret `HF_TOKEN`.
 
 Run these notebooks in order:
 
-1. `notebooks/stage2_phase0.ipynb` — complete mandatory Phase 0 engineering
+1. `notebooks/stage2/stage2_phase0.ipynb` — complete mandatory Phase 0 engineering
    harness with Qwen3-0.6B: embedding statistics, forward/backward and mask
    checks, text-only KV-cache parity, speech generation, live-vs-cache
-   integrity, and a 100-step run on 128 examples.
-2. `notebooks/stage2_train.ipynb` — Phase 1 tiny overfit on exactly 64
+   integrity, and a clean 5,000-step memorization run on 128 examples.
+2. `notebooks/stage2/stage2_phase1.ipynb` — Phase 1 tiny overfit on exactly 64
    transcription examples with Qwen3-4B. Run only after Phase 0 passes.
 
 Each run writes directly to Google Drive under

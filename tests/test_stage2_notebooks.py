@@ -4,9 +4,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOKS = [
-    ROOT / "notebooks" / "stage2_smoke_test.ipynb",
-    ROOT / "notebooks" / "stage2_train.ipynb",
-    ROOT / "notebooks" / "stage2_phase0.ipynb",
+    ROOT / "notebooks" / "stage2" / "stage2_phase0.ipynb",
+    ROOT / "notebooks" / "stage2" / "stage2_phase1.ipynb",
 ]
 
 
