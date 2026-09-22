@@ -29,8 +29,8 @@ stage2_data:
   cache_dir: data_cache/stage2
 stage2_train:
   drive_root: /content/drive/MyDrive/aether-v3/stage2
-  batch_size: 1
-  grad_accum_steps: 16
+  batch_size: 2
+  grad_accum_steps: 8
   max_steps: 5000
   warmup_steps: 200
   lr: 1.0e-4
