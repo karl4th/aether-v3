@@ -28,8 +28,8 @@ stage2_data:
   cache_dir: /content/drive/MyDrive/aether-v3/stage2/cache-r1-full-v2-en
 stage2_train:
   drive_root: /content/drive/MyDrive/aether-v3/stage2
-  batch_size: 2
-  grad_accum_steps: 8
+  batch_size: 16
+  grad_accum_steps: 1
   max_steps: 100000
   warmup_steps: 2000
   lr: 1.0e-4
@@ -38,10 +38,10 @@ stage2_train:
   grad_clip_norm: 1.0
   log_interval: 10
   show_progress_bar: true
-  eval_interval: 2500
+  eval_interval: 1000
   eval_steps: []
-  save_interval: 2500
-  eval_max_examples: 512
+  save_interval: 1000
+  eval_max_examples: 256
   generation_max_new_tokens: 256
   num_workers: 0
   seed: 1337
@@ -59,4 +59,4 @@ stage2_train:
   plateau_metric: wer
   plateau_min_delta: 0.005
   plateau_patience_evals: 3
-  plateau_start_step: 2500
+  plateau_start_step: 3000

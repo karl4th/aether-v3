@@ -527,14 +527,16 @@ splits, and all examples inside each split are cached; the full run does not
 reuse the bounded 4,096/256 smoke subsets.
 
 The hard ceiling is 100,000 optimizer steps at effective batch 16, or about
-1.6 million example presentations. Evaluation runs every 2,500 steps on a
-fixed 512-example validation subset. WER is the primary selection and
+1.6 million example presentations. The notebook selects microbatch 16 with
+no accumulation on a 96 GB RTX PRO 6000, 8 × 2 on an 80 GB GPU, and 4 × 4
+on a 40 GB GPU. Evaluation runs every 1,000 steps on a fixed 256-example
+validation subset. WER is the primary selection and
 plateau metric; validation loss and CER remain independently checkpointed.
 
 The plateau rule is fixed before the run:
 
 - significant improvement means at least `0.005` absolute WER;
-- plateau counting begins after warmup, at step 2,500;
+- plateau counting begins after warmup, at step 3,000;
 - three consecutive eligible evaluations without significant improvement
   stop training;
 - the stop writes `plateau_report.json`, `plateau_stop.pt`, `last.pt`, and
@@ -546,3 +548,10 @@ non-finite value, an absolute magnitude above `1.0`, or a single-step change
 above `0.05`, and saves `abort_output_scale.pt` on failure. This permits
 gradual learned rescaling while retaining protection against discontinuous
 failure.
+
+Cached training keeps the unused frozen AetherSpeech encoder on CPU. Each
+evaluation uses inference mode, releases temporary generation tensors,
+returns unused CUDA allocator blocks after completion, and records allocated
+and reserved VRAM before and after cleanup. The notebook also enables
+expandable CUDA allocator segments and deletes its diagnostic forward tensors
+before entering the long run.
