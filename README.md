@@ -106,3 +106,21 @@ rather than silently reusing a stale cache.
 - `src/aether_v3/eval/` — greedy CTC decode, WER/CER.
 - `configs/` — YAML experiment configs.
 - `scripts/prepare_data.py` — CLI for the offline extraction step.
+
+## Stage 2 notebooks
+
+Stage 2 uses the frozen Stage 1 encoder from the private
+`manifestro/aetherASR-EN-v0.1` repository. In Colab, add its access token as
+the private secret `HF_TOKEN`.
+
+Run these notebooks in order:
+
+1. `notebooks/stage2_smoke_test.ipynb` — tests the complete stack and runs a
+   bounded tiny overfit with Qwen3-0.6B.
+2. `notebooks/stage2_train.ipynb` — prepares restartable SLUE-SQA-5 shards and
+   trains the Qwen3-4B Stage 2 model.
+
+Each run writes directly to Google Drive under
+`aether-v2/stage2/runYYMMDD-HHMMSS`, including logs, `last.pt`, periodic
+checkpoints, and best checkpoints for validation loss, answer F1, and exact
+match.

@@ -327,10 +327,15 @@ def run_training(config: ExperimentConfig) -> None:
             lr = scheduler.get_last_lr()[0]
             steps_per_sec = steps_since_log / elapsed if elapsed > 0 else 0.0
             examples_per_sec = (
-                steps_per_sec * config.train.batch_size * config.train.grad_accum_steps * get_world_size()
+                steps_per_sec
+                * config.train.batch_size
+                * config.train.grad_accum_steps
+                * get_world_size()
             )
             eta_seconds = (
-                (config.train.max_steps - step) / steps_per_sec if steps_per_sec > 0 else float("inf")
+                (config.train.max_steps - step) / steps_per_sec
+                if steps_per_sec > 0
+                else float("inf")
             )
             logger.info(
                 "step %d/%d (%.1f%%) | loss %.4f | lr %.2e | %.2f steps/s, %.1f examples/s | "

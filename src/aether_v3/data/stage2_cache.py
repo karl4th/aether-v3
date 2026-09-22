@@ -31,6 +31,7 @@ import torch.nn as nn
 from datasets import load_from_disk
 
 from aether_v3.data.tokenizer import byte_ids_to_text
+from aether_v3.training.stage2_utils import first_answer, qa_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -123,3 +124,75 @@ def save_stage2_cache(records: list[dict[str, Any]], path: str | Path) -> None:
 
 def load_stage2_cache(path: str | Path) -> list[dict[str, Any]]:
     return torch.load(str(path), weights_only=False)
+
+
+def build_slue_sqa5_shards(
+    rows: Any,
+    mimi: Any,
+    encoder: nn.Module,
+    tokenizer: Stage2Tokenizer,
+    output_dir: str | Path,
+    role: str,
+    device: str = "cuda",
+    shard_size: int = 256,
+    max_examples: int | None = None,
+) -> int:
+    """Build restartable Stage 2B shards from streamed SLUE-SQA-5 rows.
+
+    Only question audio is encoded. The linked document remains text and is
+    tokenized into the per-example prefix. Existing complete shards are left
+    untouched, so a Colab preparation run can resume safely.
+    """
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    encoder = encoder.to(device).eval()
+    records: list[dict[str, Any]] = []
+    existing_paths = sorted(output_dir.glob("shard-*.pt"))
+    written = sum(len(load_stage2_cache(path)) for path in existing_paths)
+    rows_to_skip = written
+
+    def flush() -> None:
+        nonlocal records, written
+        if not records:
+            return
+        shard_index = written // shard_size
+        path = output_dir / f"shard-{shard_index:06d}.pt"
+        if not path.exists():
+            torch.save(records, path)
+        written += len(records)
+        records = []
+
+    for row_index, row in enumerate(rows):
+        if row_index < rows_to_skip:
+            continue
+        if max_examples is not None and written + len(records) >= max_examples:
+            break
+        audio = row["question_audio"]
+        waveform = audio["array"]
+        codes = mimi.encode_semantic([waveform], orig_sample_rate=audio["sampling_rate"])[0]
+        code_tensor = torch.as_tensor(codes, dtype=torch.long, device=device).unsqueeze(0)
+        mask = torch.ones_like(code_tensor, dtype=torch.bool)
+        with torch.no_grad():
+            states = encoder(code_tensor, mask)[0].to("cpu", dtype=torch.float16)
+
+        answers = [str(span["answer"]).strip() for span in row["answer_spans"] if span["answer"]]
+        answer = first_answer(row["answer_spans"])
+        prefix = qa_prefix(row["raw_document_text"])
+        prefix_ids = tokenizer(prefix, add_special_tokens=False)["input_ids"]
+        target_ids = tokenizer(answer, add_special_tokens=False)["input_ids"] + [
+            tokenizer.eos_token_id
+        ]
+        records.append(
+            {
+                "sample_id": row["question_id"],
+                "speech_states": states,
+                "speech_length": states.shape[0],
+                "prefix_ids": torch.tensor(prefix_ids, dtype=torch.long),
+                "target_ids": torch.tensor(target_ids, dtype=torch.long),
+                "references": answers,
+            }
+        )
+        if len(records) >= shard_size:
+            flush()
+    flush()
+    return written

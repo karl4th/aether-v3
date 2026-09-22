@@ -42,7 +42,9 @@ class _RawAudioDataset(torch.utils.data.Dataset):
     across workers instead of serially stalling the GPU each batch.
     """
 
-    def __init__(self, raw: Dataset, sample_rate_in: int, target_sample_rate: int, role: str) -> None:
+    def __init__(
+        self, raw: Dataset, sample_rate_in: int, target_sample_rate: int, role: str
+    ) -> None:
         self.raw = raw
         self.sample_rate_in = sample_rate_in
         self.target_sample_rate = target_sample_rate

@@ -100,6 +100,7 @@ class ConnectorConfig:
 @dataclasses.dataclass
 class LLMConfig:
     model_id: str = "Qwen/Qwen3-4B"
+    revision: str = "main"
     frozen: bool = True
     dtype: str = "bfloat16"
 
@@ -117,6 +118,43 @@ class Stage2LossConfig:
     kd_weight: float = 0.0
     kd_direction: str = "teacher_to_student"
     kd_temperature: float = 2.0
+
+
+@dataclasses.dataclass
+class Stage2DataConfig:
+    dataset_id: str = "asapp/slue-phase-2"
+    dataset_config: str = "sqa5"
+    train_split: str = "train"
+    validation_split: str = "validation"
+    test_split: str = "test"
+    task: str = "spoken_question_text_document_qa"
+    max_audio_seconds: float = 30.0
+    cache_dir: str = "data_cache/stage2"
+
+
+@dataclasses.dataclass
+class Stage2TrainConfig:
+    drive_root: str = "/content/drive/MyDrive/aether-v2/stage2"
+    batch_size: int = 1
+    grad_accum_steps: int = 16
+    max_steps: int = 5_000
+    warmup_steps: int = 200
+    lr: float = 1e-4
+    min_lr_ratio: float = 0.1
+    weight_decay: float = 0.01
+    grad_clip_norm: float = 1.0
+    log_interval: int = 10
+    eval_interval: int = 250
+    save_interval: int = 250
+    eval_max_examples: int = 64
+    generation_max_new_tokens: int = 64
+    num_workers: int = 2
+    seed: int = 1337
+    amp_dtype: str = "bfloat16"
+    stage1_repo_id: str = "manifestro/aetherASR-EN-v0.1"
+    stage1_filename: str = "last.pt"
+    stage1_revision: str = "main"
+    resume_from: str | None = None
 
 
 @dataclasses.dataclass
@@ -172,6 +210,11 @@ class ExperimentConfig:
     ctc: CTCConfig = dataclasses.field(default_factory=CTCConfig)
     data: DataConfig = dataclasses.field(default_factory=DataConfig)
     train: TrainConfig = dataclasses.field(default_factory=TrainConfig)
+    connector: ConnectorConfig = dataclasses.field(default_factory=ConnectorConfig)
+    llm: LLMConfig = dataclasses.field(default_factory=LLMConfig)
+    stage2_loss: Stage2LossConfig = dataclasses.field(default_factory=Stage2LossConfig)
+    stage2_data: Stage2DataConfig = dataclasses.field(default_factory=Stage2DataConfig)
+    stage2_train: Stage2TrainConfig = dataclasses.field(default_factory=Stage2TrainConfig)
 
 
 def load_config(path: str | Path) -> ExperimentConfig:
@@ -183,6 +226,14 @@ def load_config(path: str | Path) -> ExperimentConfig:
         ctc=CTCConfig(**raw.get("ctc", {})),
         data=DataConfig(**raw.get("data", {})),
         train=TrainConfig(**raw.get("train", {})),
+        connector=ConnectorConfig(
+            resampler=ResamplerConfig(**raw.get("connector", {}).get("resampler", {})),
+            bridge=BridgeConfig(**raw.get("connector", {}).get("bridge", {})),
+        ),
+        llm=LLMConfig(**raw.get("llm", {})),
+        stage2_loss=Stage2LossConfig(**raw.get("stage2_loss", {})),
+        stage2_data=Stage2DataConfig(**raw.get("stage2_data", {})),
+        stage2_train=Stage2TrainConfig(**raw.get("stage2_train", {})),
     )
 
 
@@ -193,6 +244,11 @@ def save_config(config: ExperimentConfig, path: str | Path) -> None:
         "ctc": dataclasses.asdict(config.ctc),
         "data": dataclasses.asdict(config.data),
         "train": dataclasses.asdict(config.train),
+        "connector": dataclasses.asdict(config.connector),
+        "llm": dataclasses.asdict(config.llm),
+        "stage2_loss": dataclasses.asdict(config.stage2_loss),
+        "stage2_data": dataclasses.asdict(config.stage2_data),
+        "stage2_train": dataclasses.asdict(config.stage2_train),
     }
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
