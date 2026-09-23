@@ -377,6 +377,28 @@ continued to step 22 and `batches_in_epoch=22`, and finished cleanly with no
 termination reason. This validates CUDA resume across model, optimizer,
 scheduler, RNG and deterministic data position for the exercised path.
 
+## Real-data overfit-128 probe
+
+A deliberately tiny real-data probe used 128 train rows and an independent
+64-row validation set on the RTX 3090. The run was configured for 5,000 steps,
+but was stopped cleanly with `SIGTERM` at step 2,695 after the train objective
+had saturated and validation had clearly diverged. The final resumable
+checkpoint and run status were written successfully.
+
+Evaluation of the final checkpoint on the 128 memorization rows produced:
+
+- train WER: 0.33%;
+- train CER: 0.052%;
+- train CTC loss: 0.0014;
+- train semantic-prediction loss: 0.0495;
+- empty, repetition-collapse, and catastrophic-failure rates: 0%.
+
+The latest scheduled held-out evaluation, at step 2,500, produced 95.22% WER,
+57.41% CER and 31.25% catastrophic-failure rate, with no empty or repetition
+collapse. This is the expected extreme memorization/generalization split for
+128 examples. It demonstrates that the complete q0-to-byte training path can
+fit real examples; it is not evidence of generalization or final model quality.
+
 ## Next phase
 
 Next:
