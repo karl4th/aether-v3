@@ -12,15 +12,22 @@ import torch
 
 
 def build_rope_cache(
-    seq_len: int, head_dim: int, theta: float, device: torch.device, dtype: torch.dtype
+    seq_len: int,
+    head_dim: int,
+    theta: float,
+    device: torch.device,
+    dtype: torch.dtype,
+    position_offset: int = 0,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Returns (cos, sin), each of shape (seq_len, head_dim)."""
+    """Returns RoPE values for ``[position_offset, position_offset + seq_len)``."""
     if head_dim % 2 != 0:
         raise ValueError(f"head_dim must be even for RoPE, got {head_dim}")
     inv_freq = 1.0 / (
         theta ** (torch.arange(0, head_dim, 2, device=device, dtype=torch.float32) / head_dim)
     )
-    positions = torch.arange(seq_len, device=device, dtype=torch.float32)
+    positions = torch.arange(
+        position_offset, position_offset + seq_len, device=device, dtype=torch.float32
+    )
     freqs = torch.outer(positions, inv_freq)  # (seq_len, head_dim / 2)
     emb = torch.cat((freqs, freqs), dim=-1)  # (seq_len, head_dim)
     return emb.cos().to(dtype), emb.sin().to(dtype)

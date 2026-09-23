@@ -25,6 +25,22 @@ def test_rope_at_position_zero_is_identity():
     assert torch.allclose(out, x, atol=1e-6)
 
 
+def test_rope_offset_matches_slice_of_full_cache():
+    full_cos, full_sin = build_rope_cache(
+        seq_len=10, head_dim=8, theta=10000.0, device=torch.device("cpu"), dtype=torch.float32
+    )
+    offset_cos, offset_sin = build_rope_cache(
+        seq_len=4,
+        head_dim=8,
+        theta=10000.0,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+        position_offset=3,
+    )
+    assert torch.equal(offset_cos, full_cos[3:7])
+    assert torch.equal(offset_sin, full_sin[3:7])
+
+
 def test_rope_preserves_vector_norm():
     # RoPE is a rotation - it must not change each head vector's L2 norm.
     cos, sin = build_rope_cache(

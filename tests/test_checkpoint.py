@@ -1,6 +1,15 @@
+import random
+
+import numpy as np
+import pytest
 import torch
 
-from aether_v3.training.checkpoint import load_checkpoint, save_checkpoint
+from aether_v3.training.checkpoint import (
+    load_model_weights,
+    load_training_checkpoint,
+    save_model_weights,
+    save_training_checkpoint,
+)
 
 
 def _make_triple(lr: float = 0.1):
@@ -10,34 +19,83 @@ def _make_triple(lr: float = 0.1):
     return model, optimizer, scheduler
 
 
-def test_save_and_load_roundtrip(tmp_path):
+def test_training_checkpoint_roundtrip(tmp_path):
     model, optimizer, scheduler = _make_triple()
-    path = tmp_path / "ckpt.pt"
-    save_checkpoint(path, model, optimizer, scheduler, step=42, best_cer=0.5)
+    path = tmp_path / "last.pt"
+    save_training_checkpoint(
+        path,
+        model,
+        optimizer,
+        scheduler,
+        step=42,
+        epoch=3,
+        batches_in_epoch=7,
+        best_metrics={"eval_wer": 0.2},
+    )
 
     new_model, new_optimizer, new_scheduler = _make_triple()
-    ckpt = load_checkpoint(path, new_model, new_optimizer, new_scheduler)
+    checkpoint = load_training_checkpoint(path, new_model, new_optimizer, new_scheduler)
 
-    assert ckpt["step"] == 42
-    assert ckpt["best_cer"] == 0.5
-    for p1, p2 in zip(model.parameters(), new_model.parameters(), strict=True):
-        assert torch.equal(p1, p2)
+    assert checkpoint["step"] == 42
+    assert checkpoint["epoch"] == 3
+    assert checkpoint["batches_in_epoch"] == 7
+    assert checkpoint["best_metrics"] == {"eval_wer": 0.2}
+    for expected, actual in zip(model.parameters(), new_model.parameters(), strict=True):
+        assert torch.equal(expected, actual)
 
 
-def test_load_without_optimizer_or_scheduler(tmp_path):
-    model, optimizer, scheduler = _make_triple()
-    path = tmp_path / "ckpt.pt"
-    save_checkpoint(path, model, optimizer, scheduler, step=1, best_cer=1.0)
+def test_model_snapshot_loads_without_optimizer(tmp_path):
+    model, _, _ = _make_triple()
+    path = tmp_path / "model.pt"
+    save_model_weights(path, model, step=5)
 
     new_model = torch.nn.Linear(4, 2)
-    ckpt = load_checkpoint(path, new_model)
-    assert ckpt["step"] == 1
-    for p1, p2 in zip(model.parameters(), new_model.parameters(), strict=True):
-        assert torch.equal(p1, p2)
+    snapshot = load_model_weights(path, new_model)
+
+    assert snapshot["step"] == 5
+    for expected, actual in zip(model.parameters(), new_model.parameters(), strict=True):
+        assert torch.equal(expected, actual)
 
 
-def test_save_creates_parent_directories(tmp_path):
-    model, optimizer, scheduler = _make_triple()
-    path = tmp_path / "nested" / "dir" / "ckpt.pt"
-    save_checkpoint(path, model, optimizer, scheduler, step=0, best_cer=float("inf"))
+def test_save_is_atomic_and_leaves_no_temporary_file(tmp_path):
+    model, _, _ = _make_triple()
+    path = tmp_path / "nested" / "model.pt"
+    save_model_weights(path, model, step=0)
     assert path.exists()
+    assert not path.with_suffix(".pt.tmp").exists()
+
+
+def test_resume_rejects_weights_only_snapshot(tmp_path):
+    model, optimizer, scheduler = _make_triple()
+    path = tmp_path / "model.pt"
+    save_model_weights(path, model, step=1)
+
+    with pytest.raises(ValueError, match="not resumable"):
+        load_training_checkpoint(path, model, optimizer, scheduler)
+
+
+def test_training_checkpoint_restores_rng_states(tmp_path):
+    random.seed(10)
+    np.random.seed(11)
+    torch.manual_seed(12)
+    model, optimizer, scheduler = _make_triple()
+    path = tmp_path / "last.pt"
+    save_training_checkpoint(
+        path,
+        model,
+        optimizer,
+        scheduler,
+        step=1,
+        epoch=0,
+        batches_in_epoch=1,
+        best_metrics={},
+    )
+    expected = (random.random(), float(np.random.rand()), float(torch.rand(())))
+    random.seed(20)
+    np.random.seed(21)
+    torch.manual_seed(22)
+
+    load_training_checkpoint(path, model, optimizer, scheduler)
+    actual = (random.random(), float(np.random.rand()), float(torch.rand(())))
+
+    assert actual == expected

@@ -31,6 +31,10 @@ class AetherSpeechConfig:
     dropout: float = 0.1
     rope_theta: float = 10000.0
     max_position_embeddings: int = 4096
+    # Bounded left context for online inference. Mimi q0 emits at ~12.5 Hz,
+    # so 256 frames retain roughly 20 seconds of history while keeping KV
+    # memory and per-chunk attention cost independent of conversation length.
+    streaming_left_context_frames: int = 256
 
 
 @dataclasses.dataclass
@@ -80,7 +84,9 @@ class DataConfig:
 
 @dataclasses.dataclass
 class TrainConfig:
-    output_dir: str = "runs/ctc_base"
+    runs_dir: str = "runs"
+    run_name: str = "stage1"
+    run_id: str | None = None
     batch_size: int = 32
     grad_accum_steps: int = 1
     max_steps: int = 200_000
@@ -98,7 +104,25 @@ class TrainConfig:
     seed: int = 1337
     amp_dtype: str = "bfloat16"
     wandb_project: str | None = None
-    resume_from: str | None = None
+    # Fresh initialization imports model weights only. Resume restores the
+    # complete state and continues inside the original run directory.
+    init_encoder_from: str | None = None
+    resume_run_from: str | None = None
+    encoder_lr_multiplier: float = 1.0
+    use_fused_adamw: bool = True
+    show_progress: bool = True
+
+
+@dataclasses.dataclass
+class ArtifactConfig:
+    # Authentication is intentionally environment-only. HF_TOKEN is used for
+    # Hugging Face; Google Drive uses Application Default Credentials.
+    google_drive_folder_id: str | None = None
+    hf_model_repo_id: str | None = None
+    hf_private: bool = True
+    sync_on_interrupt: bool = True
+    sync_on_completion: bool = True
+    hf_publish_selections: list[str] = dataclasses.field(default_factory=list)
 
 
 @dataclasses.dataclass
@@ -108,6 +132,7 @@ class ExperimentConfig:
     ctc: CTCConfig = dataclasses.field(default_factory=CTCConfig)
     data: DataConfig = dataclasses.field(default_factory=DataConfig)
     train: TrainConfig = dataclasses.field(default_factory=TrainConfig)
+    artifacts: ArtifactConfig = dataclasses.field(default_factory=ArtifactConfig)
 
 
 def load_config(path: str | Path) -> ExperimentConfig:
@@ -119,6 +144,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
         ctc=CTCConfig(**raw.get("ctc", {})),
         data=DataConfig(**raw.get("data", {})),
         train=TrainConfig(**raw.get("train", {})),
+        artifacts=ArtifactConfig(**raw.get("artifacts", {})),
     )
 
 
@@ -129,6 +155,7 @@ def save_config(config: ExperimentConfig, path: str | Path) -> None:
         "ctc": dataclasses.asdict(config.ctc),
         "data": dataclasses.asdict(config.data),
         "train": dataclasses.asdict(config.train),
+        "artifacts": dataclasses.asdict(config.artifacts),
     }
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:

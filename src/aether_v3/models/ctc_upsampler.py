@@ -81,5 +81,5 @@ class CTCUpsampler(nn.Module):
 
         cos, sin = build_rope_cache(t * u, self.head_dim, self.rope_theta, x.device, x.dtype)
         for block in self.blocks:
-            x = block(x, cos, sin, up_mask)
+            x, _ = block(x, cos, sin, up_mask)
         return self.final_norm(x)

@@ -7,7 +7,7 @@ a frozen Qwen3-4B LM (phase 2, not implemented yet).
 ```
 24kHz speech -> Mimi (frozen, semantic codebook, 12.5Hz, vocab=2048)
              -> Embedding(2048, 768)
-             -> AetherSpeech: 8x bidirectional RoPE transformer blocks,
+             -> AetherSpeech: 8x causal streaming RoPE transformer blocks,
                 dim 768, heads 12, FFN 3072
              -> CTC head: Linear(768, 257), byte-level UTF-8 + blank
 ```
@@ -66,29 +66,28 @@ from aether_v3.training.train_ctc import run_training
 run_training(load_config("configs/ctc_base.yaml"))
 ```
 
-Checkpoints, a `config.yaml` snapshot, and a `log.jsonl` land in
-`train.output_dir` (see `configs/ctc_base.yaml`). Dev-clean/dev-other WER and
-CER are logged every `eval_interval` steps. Set `train.wandb_project` to also
-log to Weights & Biases (optional dependency).
+Every fresh launch creates an immutable directory under `train.runs_dir`, with
+resolved config, provenance, JSONL logs, resumable `last.pt`, weights-only model
+snapshots, validation reports, and independent best-loss/WER/CER selections.
+Use `train.init_encoder_from` for a fresh experiment initialized from an encoder
+and `train.resume_run_from` only to continue an interrupted run in place.
 
-## Colab: two notebooks, cross-session caching via Drive
+Optional artifact backups are configured under `artifacts`. Hugging Face reads
+the private token from `HF_TOKEN`; Google Drive uses Application Default
+Credentials and its optional `google-api-python-client`/`google-auth` packages.
+Secrets must not be put in YAML. External upload is disabled unless a destination
+is configured.
+
+## Data-cache status
 
 `prepare_cache` downloads ~30GB of raw LibriSpeech audio, but the extracted
 result it actually needs to keep (semantic codes + byte targets) is only
 ~100-150MB, and extraction is CPU-decode-bound - it doesn't benefit from a
 strong GPU. So the notebook workflow is split in two:
 
-- `notebooks/prepare_data.ipynb` — run once on a cheap **T4** runtime.
-  Downloads LibriSpeech, runs `prepare_cache`, and mirrors just the small
-  extracted cache (not the raw audio) to Google Drive via
-  `aether_v3.data.cache_sync`.
-- `notebooks/train_ctc.ipynb` — run on a stronger GPU (A100/L4). Restores
-  that cache from Drive in seconds (raises with a clear message if it's
-  missing, rather than silently re-extracting on the expensive tier) and
-  trains. Checkpoints/logs (`train.output_dir`) are written straight to
-  Drive, and training auto-resumes from the last checkpoint there if one
-  exists, so a dropped session doesn't lose the compute units already
-  spent.
+The old notebook workflow has been removed. Data-cache design is intentionally
+pending the contract audit for the new private Stage 1 dataset. Training itself
+is a normal Python process suitable for a persistent GPU Pod.
 
 Re-running `prepare_data.ipynb` is only needed if `configs/ctc_base.yaml`'s
 data settings change - a mismatched fingerprint makes `prepare_cache` raise
@@ -101,8 +100,8 @@ rather than silently reusing a stale cache.
   extraction/caching, collate, Drive cache mirroring (`cache_sync.py`).
 - `src/aether_v3/models/` — frozen Mimi wrapper, RoPE, `AetherSpeech`
   encoder, CTC head, the combined `AetherCTCModel`.
-- `src/aether_v3/training/` — DDP-ready training loop, LR schedule,
-  checkpointing.
+- `src/aether_v3/training/` — DDP-ready training loop, optimizer groups,
+  run provenance, checkpointing, metric selections, and optional artifact backup.
 - `src/aether_v3/eval/` — greedy CTC decode, WER/CER.
 - `configs/` — YAML experiment configs.
 - `scripts/prepare_data.py` — CLI for the offline extraction step.

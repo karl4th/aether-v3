@@ -16,6 +16,7 @@ aether_speech:
   dropout: 0.1
   rope_theta: 10000.0
   max_position_embeddings: 4096
+  streaming_left_context_frames: 256 # ~20.5s at Mimi q0's 12.5Hz
 
 ctc:
   vocab_size: 257 # 256 UTF-8 byte values + 1 blank
@@ -64,7 +65,9 @@ data:
   extraction_num_workers: 8 # bump toward Colab's CPU core count if it has more
 
 train:
-  output_dir: runs/ctc_base
+  runs_dir: runs
+  run_name: stage1
+  run_id: null
   batch_size: 32
   grad_accum_steps: 1
   max_steps: 200000
@@ -82,4 +85,16 @@ train:
   seed: 1337
   amp_dtype: bfloat16
   wandb_project: null
-  resume_from: null
+  init_encoder_from: null
+  resume_run_from: null
+  encoder_lr_multiplier: 1.0
+  use_fused_adamw: true
+  show_progress: true
+
+artifacts:
+  google_drive_folder_id: null
+  hf_model_repo_id: null
+  hf_private: true
+  sync_on_interrupt: true
+  sync_on_completion: true
+  hf_publish_selections: []

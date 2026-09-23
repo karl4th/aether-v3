@@ -11,6 +11,7 @@ def test_load_config_defaults(tmp_path: Path):
     assert cfg.mimi.pretrained_id == "kyutai/mimi"
     assert cfg.ctc.vocab_size == 257
     assert cfg.ctc.blank_id == 256
+    assert cfg.aether_speech.streaming_left_context_frames == 256
 
 
 def test_load_config_overrides_only_specified_fields(tmp_path: Path):

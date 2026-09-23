@@ -15,13 +15,16 @@ import dataclasses
 import json
 import logging
 import math
+import signal
 import time
 from pathlib import Path
 
 import torch
+import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
+from tqdm.auto import tqdm
 
-from aether_v3.config import ExperimentConfig, load_config, save_config
+from aether_v3.config import ExperimentConfig, load_config
 from aether_v3.data.cached_dataset import CTCCachedDataset
 from aether_v3.data.collate import collate_ctc_batch
 from aether_v3.data.tokenizer import byte_ids_to_text
@@ -29,7 +32,16 @@ from aether_v3.eval.decode import greedy_ctc_decode
 from aether_v3.eval.metrics import compute_cer, compute_wer
 from aether_v3.models.aether_ctc_model import AetherCTCModel
 from aether_v3.models.ctc_head import compute_ctc_loss
-from aether_v3.training.checkpoint import load_checkpoint, save_checkpoint
+from aether_v3.training.artifacts import (
+    publish_checkpoint_to_huggingface,
+    sync_run_backups,
+)
+from aether_v3.training.checkpoint import (
+    load_encoder_weights,
+    load_training_checkpoint,
+    save_model_weights,
+    save_training_checkpoint,
+)
 from aether_v3.training.dist_utils import (
     get_rank,
     get_world_size,
@@ -40,6 +52,8 @@ from aether_v3.training.dist_utils import (
     unwrap_model,
     wrap_model,
 )
+from aether_v3.training.optimizer import build_optimizer
+from aether_v3.training.run import MetricSelections, RunDirectory
 from aether_v3.training.scheduler import build_scheduler
 
 logger = logging.getLogger(__name__)
@@ -93,6 +107,23 @@ class JsonlLogger:
         self._f.close()
 
 
+class StopRequest:
+    """Signal-safe flag checked at optimizer-step boundaries."""
+
+    def __init__(self) -> None:
+        self.signal_name: str | None = None
+
+    def request(self, signum: int, _frame) -> None:
+        self.signal_name = signal.Signals(signum).name
+
+
+def _is_finite_across_ranks(value: torch.Tensor) -> bool:
+    finite = torch.isfinite(value).all().to(dtype=torch.int32)
+    if is_distributed():
+        dist.all_reduce(finite, op=dist.ReduceOp.MIN)
+    return bool(finite.item())
+
+
 def build_dataloader(
     dataset: CTCCachedDataset,
     batch_size: int,
@@ -100,12 +131,14 @@ def build_dataloader(
     num_workers: int,
     distributed: bool,
     drop_last: bool,
+    seed: int = 0,
 ) -> tuple[DataLoader, DistributedSampler | None]:
     sampler: DistributedSampler | None = None
     use_shuffle = shuffle
     if distributed:
-        sampler = DistributedSampler(dataset, shuffle=shuffle)
+        sampler = DistributedSampler(dataset, shuffle=shuffle, seed=seed)
         use_shuffle = False
+    generator = torch.Generator().manual_seed(seed)
     loader = DataLoader(
         dataset,
         batch_size=batch_size,
@@ -115,8 +148,30 @@ def build_dataloader(
         collate_fn=collate_ctc_batch,
         pin_memory=True,
         drop_last=drop_last,
+        generator=generator,
     )
     return loader, sampler
+
+
+def _iter_epoch(
+    loader: DataLoader,
+    sampler: DistributedSampler | None,
+    *,
+    seed: int,
+    epoch: int,
+    skip_batches: int = 0,
+):
+    if sampler is not None:
+        sampler.set_epoch(epoch)
+    if loader.generator is not None:
+        loader.generator.manual_seed(seed + epoch)
+    iterator = iter(loader)
+    for _ in range(skip_batches):
+        try:
+            next(iterator)
+        except StopIteration as exc:
+            raise ValueError("checkpoint data position exceeds the epoch length") from exc
+    return iterator
 
 
 def targets_to_texts(targets: torch.Tensor, lengths: torch.Tensor) -> list[str]:
@@ -135,6 +190,7 @@ def evaluate(
     device: torch.device,
     amp_dtype: torch.dtype,
     blank_id: int,
+    show_progress: bool = False,
 ) -> dict:
     """Evaluates on every example in `loader` - no batch cap.
 
@@ -154,7 +210,15 @@ def evaluate(
     all_hyps: list[str] = []
     total_loss = 0.0
     n_batches = 0
-    for batch in loader:
+    batches = tqdm(
+        loader,
+        total=len(loader),
+        desc="validation",
+        leave=False,
+        disable=not show_progress,
+        dynamic_ncols=True,
+    )
+    for batch in batches:
         batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
         up_input_lengths = batch["input_lengths"] * upsample_factor
         with _amp_autocast(device, amp_dtype):
@@ -181,20 +245,32 @@ def evaluate(
     }
 
 
-def run_training(config: ExperimentConfig) -> None:
+def run_training(config: ExperimentConfig) -> Path:
+    if config.train.init_encoder_from and config.train.resume_run_from:
+        raise ValueError("init_encoder_from and resume_run_from are mutually exclusive")
+
     device = setup_distributed()
     distributed = is_distributed()
     torch.manual_seed(config.train.seed + get_rank())
 
-    output_dir = Path(config.train.output_dir)
+    run_path: str | None = None
     if is_main_process():
-        output_dir.mkdir(parents=True, exist_ok=True)
-        save_config(config, output_dir / "config.yaml")
+        run = (
+            RunDirectory.resume(config.train.resume_run_from)
+            if config.train.resume_run_from
+            else RunDirectory.create(config)
+        )
+        run_path = str(run.path)
+    if distributed:
+        shared_path = [run_path]
+        dist.broadcast_object_list(shared_path, src=0)
+        run_path = shared_path[0]
+    assert run_path is not None
+    run = RunDirectory.resume(run_path)
 
     cache_dir = Path(config.data.cache_dir)
     train_ds = CTCCachedDataset(cache_dir / "train")
     val_ds = CTCCachedDataset(cache_dir / "validation")
-
     train_loader, train_sampler = build_dataloader(
         train_ds,
         config.train.batch_size,
@@ -202,6 +278,7 @@ def run_training(config: ExperimentConfig) -> None:
         num_workers=config.train.num_workers,
         distributed=distributed,
         drop_last=True,
+        seed=config.train.seed,
     )
     val_loader, _ = build_dataloader(
         val_ds,
@@ -210,37 +287,41 @@ def run_training(config: ExperimentConfig) -> None:
         num_workers=config.train.num_workers,
         distributed=False,
         drop_last=False,
+        seed=config.train.seed,
     )
 
-    model: torch.nn.Module = AetherCTCModel(config.aether_speech, config.ctc)
-    # input_lengths (computed at Mimi's raw 12.5Hz rate) must be scaled to
-    # match the CTC branch's upsampled output rate - see CTCUpsampler.
-    ctc_upsample_factor = model.upsample_factor
-    model = wrap_model(model, device)
-
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=config.train.lr,
-        betas=(config.train.adam_beta1, config.train.adam_beta2),
-        weight_decay=config.train.weight_decay,
-    )
+    raw_model = AetherCTCModel(config.aether_speech, config.ctc)
+    if config.train.init_encoder_from:
+        load_encoder_weights(config.train.init_encoder_from, raw_model.encoder)
+    ctc_upsample_factor = raw_model.upsample_factor
+    model: torch.nn.Module = wrap_model(raw_model, device)
+    optimizer = build_optimizer(model, config.train, device)
     scheduler = build_scheduler(
         optimizer, config.train.warmup_steps, config.train.max_steps, config.train.min_lr_ratio
     )
 
     step = 0
-    best_cer = float("inf")
-    if config.train.resume_from:
-        checkpoint = load_checkpoint(
-            config.train.resume_from, model, optimizer, scheduler, map_location=device
+    epoch = 0
+    batches_in_epoch = 0
+    best_metrics: dict[str, float] = {}
+    if config.train.resume_run_from:
+        checkpoint = load_training_checkpoint(
+            run.path / "checkpoints" / "last.pt",
+            model,
+            optimizer,
+            scheduler,
+            map_location=device,
         )
-        step = checkpoint.get("step", 0)
-        best_cer = checkpoint.get("best_cer", float("inf"))
+        step = checkpoint["step"]
+        epoch = checkpoint["epoch"]
+        batches_in_epoch = checkpoint["batches_in_epoch"]
+        best_metrics = checkpoint["best_metrics"]
 
+    selections = MetricSelections(run, best_metrics)
     amp_dtype = getattr(torch, config.train.amp_dtype)
     blank_id = config.ctc.blank_id
-
-    json_logger = JsonlLogger(output_dir / "log.jsonl") if is_main_process() else None
+    json_logger = JsonlLogger(run.path / "train.jsonl") if is_main_process() else None
+    event_logger = JsonlLogger(run.path / "events.jsonl") if is_main_process() else None
     wandb_run = None
     if is_main_process() and config.train.wandb_project:
         try:
@@ -248,161 +329,273 @@ def run_training(config: ExperimentConfig) -> None:
 
             wandb_run = wandb.init(
                 project=config.train.wandb_project,
-                config={
-                    "mimi": dataclasses.asdict(config.mimi),
-                    "aether_speech": dataclasses.asdict(config.aether_speech),
-                    "ctc": dataclasses.asdict(config.ctc),
-                    "data": dataclasses.asdict(config.data),
-                    "train": dataclasses.asdict(config.train),
-                },
+                name=run.run_id,
+                config=dataclasses.asdict(config),
             )
         except ImportError:
             logger.warning("wandb_project is set but wandb is not installed; skipping.")
 
+    stop_request = StopRequest()
+    previous_handlers = {
+        sig: signal.signal(sig, stop_request.request) for sig in (signal.SIGTERM, signal.SIGINT)
+    }
+    progress = tqdm(
+        total=config.train.max_steps,
+        initial=step,
+        desc=run.run_id,
+        disable=not (is_main_process() and config.train.show_progress),
+        dynamic_ncols=True,
+    )
+
     model.train()
-    optimizer.zero_grad()
-    data_iter = iter(train_loader)
-    epoch = 0
+    optimizer.zero_grad(set_to_none=True)
+    data_iter = _iter_epoch(
+        train_loader,
+        train_sampler,
+        seed=config.train.seed,
+        epoch=epoch,
+        skip_batches=batches_in_epoch,
+    )
     running_loss = 0.0
     steps_since_log = 0
     t0 = time.time()
+    termination_reason: str | None = None
 
     if is_main_process():
-        logger.info(
-            "Starting training from step %d/%d (batch_size=%d, grad_accum_steps=%d, "
-            "world_size=%d, device=%s) - first log line in ~%d step(s).",
-            step,
-            config.train.max_steps,
-            config.train.batch_size,
-            config.train.grad_accum_steps,
-            get_world_size(),
-            device,
-            min(config.train.log_interval, 10),
-        )
+        run.write_status(state="running", step=step)
+        assert event_logger is not None
+        event_logger.log(event="run_started", run_id=run.run_id, step=step)
 
-    while step < config.train.max_steps:
-        for micro_step in range(config.train.grad_accum_steps):
-            try:
-                batch = next(data_iter)
-            except StopIteration:
-                epoch += 1
-                if train_sampler is not None:
-                    train_sampler.set_epoch(epoch)
-                data_iter = iter(train_loader)
-                batch = next(data_iter)
-
-            batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-            is_last_micro_step = micro_step == config.train.grad_accum_steps - 1
-            sync_ctx: contextlib.AbstractContextManager
-            if not distributed or is_last_micro_step:
-                sync_ctx = contextlib.nullcontext()
-            else:
-                assert isinstance(model, torch.nn.parallel.DistributedDataParallel)
-                sync_ctx = model.no_sync()
-            with sync_ctx:
-                with _amp_autocast(device, amp_dtype):
-                    log_probs = model(batch["semantic_codes"], batch["attention_mask"])
-                    loss = compute_ctc_loss(
-                        log_probs,
-                        batch["targets"],
-                        batch["input_lengths"] * ctc_upsample_factor,
-                        batch["target_lengths"],
-                        blank_id,
+    try:
+        while step < config.train.max_steps and stop_request.signal_name is None:
+            step_loss = torch.zeros((), device=device)
+            for micro_step in range(config.train.grad_accum_steps):
+                try:
+                    batch = next(data_iter)
+                except StopIteration:
+                    epoch += 1
+                    batches_in_epoch = 0
+                    data_iter = _iter_epoch(
+                        train_loader, train_sampler, seed=config.train.seed, epoch=epoch
                     )
-                    loss = loss / config.train.grad_accum_steps
-                loss.backward()
-            running_loss += loss.item()
+                    batch = next(data_iter)
+                batches_in_epoch += 1
 
-        torch.nn.utils.clip_grad_norm_(model.parameters(), config.train.grad_clip_norm)
-        optimizer.step()
-        scheduler.step()
-        optimizer.zero_grad()
-        step += 1
-        steps_since_log += 1
+                batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
+                is_last_micro_step = micro_step == config.train.grad_accum_steps - 1
+                sync_ctx: contextlib.AbstractContextManager
+                if not distributed or is_last_micro_step:
+                    sync_ctx = contextlib.nullcontext()
+                else:
+                    assert isinstance(model, torch.nn.parallel.DistributedDataParallel)
+                    sync_ctx = model.no_sync()
+                with sync_ctx:
+                    with _amp_autocast(device, amp_dtype):
+                        log_probs = model(batch["semantic_codes"], batch["attention_mask"])
+                        loss = compute_ctc_loss(
+                            log_probs,
+                            batch["targets"],
+                            batch["input_lengths"] * ctc_upsample_factor,
+                            batch["target_lengths"],
+                            blank_id,
+                        )
+                        loss = loss / config.train.grad_accum_steps
+                    if not _is_finite_across_ranks(loss):
+                        termination_reason = "non_finite_loss"
+                        break
+                    loss.backward()
+                    step_loss += loss.detach()
+            if termination_reason:
+                break
 
-        should_log = step in _EARLY_LOG_STEPS or steps_since_log >= config.train.log_interval
-        if is_main_process() and should_log:
-            elapsed = time.time() - t0
-            avg_loss = running_loss / steps_since_log
-            lr = scheduler.get_last_lr()[0]
-            steps_per_sec = steps_since_log / elapsed if elapsed > 0 else 0.0
-            examples_per_sec = (
-                steps_per_sec * config.train.batch_size * config.train.grad_accum_steps * get_world_size()
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                model.parameters(), config.train.grad_clip_norm
             )
-            eta_seconds = (
-                (config.train.max_steps - step) / steps_per_sec if steps_per_sec > 0 else float("inf")
-            )
-            logger.info(
-                "step %d/%d (%.1f%%) | loss %.4f | lr %.2e | %.2f steps/s, %.1f examples/s | "
-                "ETA %s",
-                step,
-                config.train.max_steps,
-                100.0 * step / config.train.max_steps,
-                avg_loss,
-                lr,
-                steps_per_sec,
-                examples_per_sec,
-                _format_duration(eta_seconds),
-            )
-            if json_logger is not None:
-                json_logger.log(step=step, loss=avg_loss, lr=lr)
-            if wandb_run:
-                wandb_run.log({"train/loss": avg_loss, "train/lr": lr}, step=step)
-            running_loss = 0.0
-            steps_since_log = 0
-            t0 = time.time()
+            if not _is_finite_across_ranks(grad_norm):
+                termination_reason = "non_finite_gradient"
+                break
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
+            step += 1
+            progress.update(1)
+            steps_since_log += 1
+            running_loss += float(step_loss.item())
 
-        if step % config.train.eval_interval == 0:
-            if is_main_process():
-                logger.info("step %d | running eval on the full validation set ...", step)
-            eval_t0 = time.time()
-            metrics = evaluate(model, val_loader, device, amp_dtype, blank_id)
-            # Push the training-throughput clock forward by however long eval
-            # took, so it isn't misattributed to the surrounding training
-            # steps - otherwise the next steps_per_sec/ETA log looks like a
-            # slowdown that never actually happened.
-            t0 += time.time() - eval_t0
-            if is_main_process():
-                logger.info(
-                    "eval @ step %d | loss %.4f | wer %.4f | cer %.4f",
-                    step,
-                    metrics["loss"],
-                    metrics["wer"],
-                    metrics["cer"],
+            should_log = step in _EARLY_LOG_STEPS or steps_since_log >= config.train.log_interval
+            if is_main_process() and should_log:
+                elapsed = time.time() - t0
+                avg_loss = running_loss / steps_since_log
+                lr = scheduler.get_last_lr()[0]
+                steps_per_sec = steps_since_log / elapsed if elapsed > 0 else 0.0
+                examples_per_sec = (
+                    steps_per_sec
+                    * config.train.batch_size
+                    * config.train.grad_accum_steps
+                    * get_world_size()
                 )
-                for ref, hyp in metrics["examples"]:
-                    logger.info("  ref: %r", ref)
-                    logger.info("  hyp: %r", hyp)
-                if json_logger is not None:
-                    json_logger.log(
-                        step=step,
-                        eval_loss=metrics["loss"],
-                        eval_wer=metrics["wer"],
-                        eval_cer=metrics["cer"],
-                    )
+                eta_seconds = (
+                    (config.train.max_steps - step) / steps_per_sec
+                    if steps_per_sec > 0
+                    else float("inf")
+                )
+                vram_allocated = (
+                    torch.cuda.memory_allocated(device) / 2**30 if device.type == "cuda" else 0.0
+                )
+                progress.set_postfix(
+                    loss=f"{avg_loss:.4f}",
+                    grad=f"{float(grad_norm):.3f}",
+                    lr=f"{lr:.2e}",
+                    eta=_format_duration(eta_seconds),
+                )
+                assert json_logger is not None
+                json_logger.log(
+                    event="train",
+                    step=step,
+                    epoch=epoch,
+                    loss=avg_loss,
+                    grad_norm=float(grad_norm),
+                    lr=lr,
+                    steps_per_second=steps_per_sec,
+                    examples_per_second=examples_per_sec,
+                    vram_allocated_gib=vram_allocated,
+                )
                 if wandb_run:
                     wandb_run.log(
                         {
-                            "eval/loss": metrics["loss"],
-                            "eval/wer": metrics["wer"],
-                            "eval/cer": metrics["cer"],
+                            "train/loss": avg_loss,
+                            "train/grad_norm": float(grad_norm),
+                            "train/lr": lr,
+                            "train/steps_per_second": steps_per_sec,
+                            "system/vram_allocated_gib": vram_allocated,
                         },
                         step=step,
                     )
-                if metrics["cer"] < best_cer:
-                    best_cer = metrics["cer"]
-                    save_checkpoint(
-                        output_dir / "best.pt", model, optimizer, scheduler, step, best_cer
+                running_loss = 0.0
+                steps_since_log = 0
+                t0 = time.time()
+
+            if step % config.train.eval_interval == 0:
+                eval_t0 = time.time()
+                metrics = (
+                    evaluate(
+                        unwrap_model(model),
+                        val_loader,
+                        device,
+                        amp_dtype,
+                        blank_id,
+                        show_progress=config.train.show_progress,
                     )
+                    if is_main_process()
+                    else None
+                )
+                if distributed:
+                    dist.barrier()
+                t0 += time.time() - eval_t0
+                if is_main_process():
+                    assert metrics is not None
+                    metric_values = {
+                        "eval_loss": float(metrics["loss"]),
+                        "eval_wer": float(metrics["wer"]),
+                        "eval_cer": float(metrics["cer"]),
+                    }
+                    evaluation_path = run.path / "evaluations" / f"validation_step_{step:08d}.json"
+                    evaluation_path.write_text(
+                        json.dumps({"step": step, **metrics}, indent=2) + "\n"
+                    )
+                    improved = selections.improvements(metric_values)
+                    snapshot = run.path / "checkpoints" / f"step_{step:08d}_model.pt"
+                    if improved:
+                        save_model_weights(snapshot, model, step=step)
+                        selections.update(metric_values, step, snapshot)
+                    assert json_logger is not None
+                    json_logger.log(step=step, event="validation", **metric_values)
+                    if wandb_run:
+                        wandb_run.log(metric_values, step=step)
+                    if improved and event_logger is not None:
+                        event_logger.log(event="new_best", step=step, metrics=improved)
+                    if config.artifacts.hf_model_repo_id:
+                        for metric in improved:
+                            selection = metric.removeprefix("eval_")
+                            if selection in config.artifacts.hf_publish_selections:
+                                try:
+                                    publish_checkpoint_to_huggingface(
+                                        run.path,
+                                        snapshot,
+                                        config.artifacts.hf_model_repo_id,
+                                        private=config.artifacts.hf_private,
+                                        selection=selection,
+                                    )
+                                except Exception as exc:  # noqa: BLE001
+                                    if event_logger is not None:
+                                        event_logger.log(
+                                            event="huggingface_publish_failed",
+                                            selection=selection,
+                                            error=str(exc),
+                                        )
 
-        if is_main_process() and step % config.train.save_interval == 0:
-            save_checkpoint(output_dir / "last.pt", model, optimizer, scheduler, step, best_cer)
+            if is_main_process() and step % config.train.save_interval == 0:
+                save_training_checkpoint(
+                    run.path / "checkpoints" / "last.pt",
+                    model,
+                    optimizer,
+                    scheduler,
+                    step=step,
+                    epoch=epoch,
+                    batches_in_epoch=batches_in_epoch,
+                    best_metrics=selections.best,
+                )
+                run.write_status(state="running", step=step, epoch=epoch)
 
-    if is_main_process():
-        save_checkpoint(output_dir / "last.pt", model, optimizer, scheduler, step, best_cer)
-        if json_logger is not None:
-            json_logger.close()
-    teardown_distributed()
+        if stop_request.signal_name:
+            termination_reason = f"signal_{stop_request.signal_name}"
+    except BaseException as exc:
+        termination_reason = f"exception_{type(exc).__name__}"
+        raise
+    finally:
+        progress.close()
+        if is_main_process():
+            state = "completed" if step >= config.train.max_steps else "interrupted"
+            if termination_reason and termination_reason.startswith("non_finite"):
+                state = "failed"
+            save_training_checkpoint(
+                run.path / "checkpoints" / "last.pt",
+                model,
+                optimizer,
+                scheduler,
+                step=step,
+                epoch=epoch,
+                batches_in_epoch=batches_in_epoch,
+                best_metrics=selections.best,
+                termination_reason=termination_reason,
+            )
+            run.write_status(
+                state=state,
+                step=step,
+                epoch=epoch,
+                termination_reason=termination_reason,
+            )
+            should_sync = (state == "completed" and config.artifacts.sync_on_completion) or (
+                state != "completed" and config.artifacts.sync_on_interrupt
+            )
+            if should_sync:
+                errors = sync_run_backups(run.path, config.artifacts)
+                if errors and event_logger is not None:
+                    event_logger.log(event="artifact_sync_failed", errors=errors)
+            if event_logger is not None:
+                event_logger.log(event="run_finished", state=state, step=step)
+                event_logger.close()
+            if json_logger is not None:
+                json_logger.close()
+            if wandb_run:
+                wandb_run.finish(exit_code=0 if state == "completed" else 1)
+        for sig, handler in previous_handlers.items():
+            signal.signal(sig, handler)
+        teardown_distributed()
+
+    if termination_reason and termination_reason.startswith("non_finite"):
+        raise FloatingPointError(termination_reason)
+    return run.path
 
 
 def main() -> None:

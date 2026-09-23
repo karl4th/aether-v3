@@ -2,7 +2,7 @@
 # src/aether_v3/models/ctc_upsampler.py and notebooks/ctc_upsampler_experiment.ipynb).
 #
 # Identical to ctc_base.yaml except `train:` (short run, separate
-# output_dir so it never collides with the old baseline's checkpoints/
+# run_name so it never collides with the old baseline's checkpoints/
 # logs) - `data.cache_dir` is deliberately the SAME as ctc_base.yaml so
 # the (expensive, one-time) re-extraction this notebook triggers also
 # becomes the cache the full 200k-step run in ctc_base.yaml will use.
@@ -21,6 +21,7 @@ aether_speech:
   dropout: 0.1
   rope_theta: 10000.0
   max_position_embeddings: 4096
+  streaming_left_context_frames: 256
 
 ctc:
   vocab_size: 257
@@ -47,7 +48,9 @@ data:
   extraction_num_workers: 8
 
 train:
-  output_dir: runs/ctc_upsampler_smoke
+  runs_dir: runs
+  run_name: stage1-upsampler-smoke
+  run_id: null
   batch_size: 32
   grad_accum_steps: 1
   max_steps: 8000
@@ -65,4 +68,16 @@ train:
   seed: 1337
   amp_dtype: bfloat16
   wandb_project: null
-  resume_from: null
+  init_encoder_from: null
+  resume_run_from: null
+  encoder_lr_multiplier: 1.0
+  use_fused_adamw: true
+  show_progress: true
+
+artifacts:
+  google_drive_folder_id: null
+  hf_model_repo_id: null
+  hf_private: true
+  sync_on_interrupt: true
+  sync_on_completion: true
+  hf_publish_selections: []
