@@ -332,7 +332,7 @@ The complete local quality gate passed:
 ruff check: passed
 ruff format --check: passed
 mypy src: passed (30 source files)
-pytest: 165 passed
+pytest: 166 passed
 git diff --check: passed
 ```
 
@@ -355,6 +355,12 @@ commit `c70267c`: 32 examples, 850 q0 frames, maximum length 37 frames, full
 joint forward/backward plus fused AdamW step, 0.697 seconds and 1.232 GiB peak
 allocated VRAM. This is an execution-contract check, not a quality result or a
 safe full-run batch-budget measurement.
+
+The first real resume attempt exposed a CUDA-only checkpoint bug: loading with
+`map_location=cuda` also moved the serialized CPU RNG state to CUDA, which
+`torch.set_rng_state` rejects. RNG restoration now explicitly moves CPU and
+per-device CUDA RNG ByteTensors back to CPU before installing them. A regression
+test covers the device-mapped CPU state contract.
 
 ## Next phase
 

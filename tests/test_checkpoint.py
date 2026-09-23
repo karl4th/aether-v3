@@ -5,8 +5,10 @@ import pytest
 import torch
 
 from aether_v3.training.checkpoint import (
+    capture_rng_state,
     load_model_weights,
     load_training_checkpoint,
+    restore_rng_state,
     save_model_weights,
     save_training_checkpoint,
 )
@@ -99,3 +101,22 @@ def test_training_checkpoint_restores_rng_states(tmp_path):
     actual = (random.random(), float(np.random.rand()), float(torch.rand(())))
 
     assert actual == expected
+
+
+def test_restore_rng_moves_serialized_cpu_state_back_to_cpu():
+    class DeviceMappedState:
+        def __init__(self, tensor):
+            self.tensor = tensor
+            self.cpu_called = False
+
+        def cpu(self):
+            self.cpu_called = True
+            return self.tensor
+
+    state = capture_rng_state()
+    mapped = DeviceMappedState(state["torch_cpu"])
+    state["torch_cpu"] = mapped
+
+    restore_rng_state(state)
+
+    assert mapped.cpu_called

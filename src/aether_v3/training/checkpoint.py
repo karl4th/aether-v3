@@ -38,9 +38,12 @@ def capture_rng_state() -> dict[str, Any]:
 def restore_rng_state(state: dict[str, Any]) -> None:
     random.setstate(state["python"])
     np.random.set_state(state["numpy"])
-    torch.set_rng_state(state["torch_cpu"])
+    # A training checkpoint is normally loaded with map_location=device.
+    # On CUDA that also moves the serialized CPU RNG ByteTensor to CUDA,
+    # while torch.set_rng_state explicitly requires a CPU ByteTensor.
+    torch.set_rng_state(state["torch_cpu"].cpu())
     if "torch_cuda" in state and torch.cuda.is_available():
-        torch.cuda.set_rng_state_all(state["torch_cuda"])
+        torch.cuda.set_rng_state_all([rng_state.cpu() for rng_state in state["torch_cuda"]])
 
 
 def save_model_weights(path: str | Path, model: nn.Module, *, step: int) -> None:
