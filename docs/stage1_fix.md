@@ -362,6 +362,21 @@ The first real resume attempt exposed a CUDA-only checkpoint bug: loading with
 per-device CUDA RNG ByteTensors back to CPU before installing them. A regression
 test covers the device-mapped CPU state contract.
 
+A second bounded RunPod exercise trained the full model on 256 real train and
+64 real validation rows for 20 optimizer steps, evaluating every five steps.
+The run completed in about six seconds, wrote periodic and final checkpoints,
+four evaluation reports, independent metric selections, status and JSONL logs.
+Train CTC loss fell from 15.67 at step 1 to 3.01 at step 20; validation CTC loss
+fell from 4.80 at step 5 to 2.99 at step 20. Greedy validation output remained
+the empty CTC hypothesis (WER/CER and catastrophic failure rate all 100%), an
+expected early blank-collapse signal at this tiny budget and evidence that loss
+alone must not select the model. This smoke is not a quality result.
+
+After the RNG fix, the same run resumed from step 20 and `batches_in_epoch=20`,
+continued to step 22 and `batches_in_epoch=22`, and finished cleanly with no
+termination reason. This validates CUDA resume across model, optimizer,
+scheduler, RNG and deterministic data position for the exercised path.
+
 ## Next phase
 
 Next:
