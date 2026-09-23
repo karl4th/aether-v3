@@ -12,6 +12,8 @@ def test_load_config_defaults(tmp_path: Path):
     assert cfg.ctc.vocab_size == 257
     assert cfg.ctc.blank_id == 256
     assert cfg.aether_speech.streaming_left_context_frames == 256
+    assert cfg.semantic_prediction.enabled is True
+    assert cfg.semantic_prediction.future_horizons == [1, 2, 4]
 
 
 def test_load_config_overrides_only_specified_fields(tmp_path: Path):

@@ -34,6 +34,10 @@ audio
 CTC-ветка является обучающим и диагностическим инструментом. Итоговый
 артефакт Stage 1 — `AetherSpeech`, а не CTC-декодер.
 
+CTC не является единственным objective. Дополнительное causal-предсказание
+будущих Mimi semantic tokens сохраняет структуру речевого потока, которая не
+получает градиента от транскрипции. Начальные горизонты — 1, 2 и 4 Mimi frames.
+
 ## 2. Причина повторного Stage 1
 
 Текущий Stage 1 достиг 16.35% WER на чистой аудиокнижной речи и подтвердил,
@@ -79,9 +83,11 @@ WHY ARE YOU
 | AetherSpeech | trainable |
 | CTC upsampler | trainable diagnostic branch |
 | Byte-level CTC head | trainable diagnostic branch |
+| Future-q0 prediction heads | trainable auxiliary branch |
 
-Начальная итерация не меняет одновременно Mimi, размер AetherSpeech и
-objective. Это позволяет отдельно измерить эффект разнообразных 2 500 часов.
+Начальная итерация не меняет одновременно Mimi и размер AetherSpeech. Joint
+CTC + future-q0 objective фиксируется до matched smoke, чтобы отдельно измерить
+эффект разнообразных 2 500 часов.
 
 CTC baseline использует:
 

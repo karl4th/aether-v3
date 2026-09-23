@@ -60,6 +60,15 @@ class CTCConfig:
 
 
 @dataclasses.dataclass
+class SemanticPredictionConfig:
+    """Auxiliary causal objective that prevents CTC-only representations."""
+
+    enabled: bool = True
+    weight: float = 0.25
+    future_horizons: list[int] = dataclasses.field(default_factory=lambda: [1, 2, 4])
+
+
+@dataclasses.dataclass
 class DataConfig:
     dataset_id: str = "openslr/librispeech_asr"
     fallback_dataset_id: str = "distil-whisper/librispeech_asr"
@@ -130,6 +139,9 @@ class ExperimentConfig:
     mimi: MimiConfig = dataclasses.field(default_factory=MimiConfig)
     aether_speech: AetherSpeechConfig = dataclasses.field(default_factory=AetherSpeechConfig)
     ctc: CTCConfig = dataclasses.field(default_factory=CTCConfig)
+    semantic_prediction: SemanticPredictionConfig = dataclasses.field(
+        default_factory=SemanticPredictionConfig
+    )
     data: DataConfig = dataclasses.field(default_factory=DataConfig)
     train: TrainConfig = dataclasses.field(default_factory=TrainConfig)
     artifacts: ArtifactConfig = dataclasses.field(default_factory=ArtifactConfig)
@@ -142,6 +154,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
         mimi=MimiConfig(**raw.get("mimi", {})),
         aether_speech=AetherSpeechConfig(**raw.get("aether_speech", {})),
         ctc=CTCConfig(**raw.get("ctc", {})),
+        semantic_prediction=SemanticPredictionConfig(**raw.get("semantic_prediction", {})),
         data=DataConfig(**raw.get("data", {})),
         train=TrainConfig(**raw.get("train", {})),
         artifacts=ArtifactConfig(**raw.get("artifacts", {})),
@@ -153,6 +166,7 @@ def save_config(config: ExperimentConfig, path: str | Path) -> None:
         "mimi": dataclasses.asdict(config.mimi),
         "aether_speech": dataclasses.asdict(config.aether_speech),
         "ctc": dataclasses.asdict(config.ctc),
+        "semantic_prediction": dataclasses.asdict(config.semantic_prediction),
         "data": dataclasses.asdict(config.data),
         "train": dataclasses.asdict(config.train),
         "artifacts": dataclasses.asdict(config.artifacts),

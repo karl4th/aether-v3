@@ -191,6 +191,39 @@ Training safety now includes:
 - explicit run states and termination reasons;
 - artifact-sync failures recorded as events instead of destroying local state.
 
+## Removal of the CTC-only objective bottleneck
+
+CTC remains useful for exact transcript recovery and WER, but it treats
+non-transcribed structure such as breathing, laughter, hesitation, and acoustic
+events as blank. It is therefore no longer the only objective applied to
+AetherSpeech.
+
+The training model now includes three disposable causal semantic-prediction
+heads. From every AetherSpeech state they predict the Mimi q0 token at future
+horizons of 1, 2, and 4 semantic frames. The default joint loss is:
+
+```text
+L = L_CTC + 0.25 * mean(L_q0@1, L_q0@2, L_q0@4)
+```
+
+Properties of the implementation:
+
+- each horizon has its own linear prediction head;
+- padding is excluded from both source and target positions;
+- horizons longer than a sequence are safely skipped;
+- loss remains connected and zero when a batch has no valid prediction pair;
+- prediction logits are produced one horizon at a time rather than stacked;
+- training logs CTC, semantic-prediction, and combined losses independently;
+- validation reports the same three loss values;
+- prediction heads are training-only and are not part of the final production
+  AetherSpeech encoder.
+
+This objective preserves predictive structure present in Mimi q0; it cannot
+recover non-verbal information already discarded by q0. A separate linear-probe
+experiment on laughter, breathing, coughs, silence, and other events remains
+necessary before claiming that q0 carries those signals. Additional Mimi
+streams or a dedicated event/prosody path may still be required for AetherDuplex.
+
 ## Progress and logs
 
 Training and validation have separate `tqdm` progress displays. Machine-readable
@@ -271,8 +304,8 @@ The complete local quality gate passed:
 ```text
 ruff check: passed
 ruff format --check: passed
-mypy src: passed (27 source files)
-pytest: 146 passed
+mypy src: passed (28 source files)
+pytest: 149 passed
 git diff --check: passed
 ```
 

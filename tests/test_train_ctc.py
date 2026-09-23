@@ -97,7 +97,14 @@ def test_evaluate_runs_end_to_end_on_tiny_model(tmp_path):
     metrics = evaluate(
         model, loader, torch.device("cpu"), torch.bfloat16, blank_id=ctc_cfg.blank_id
     )
-    assert set(metrics) == {"loss", "wer", "cer", "examples"}
+    assert set(metrics) == {
+        "loss",
+        "ctc_loss",
+        "semantic_loss",
+        "wer",
+        "cer",
+        "examples",
+    }
     assert isinstance(metrics["loss"], float)
     assert isinstance(metrics["wer"], float)
     assert isinstance(metrics["cer"], float)

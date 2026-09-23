@@ -30,6 +30,11 @@ ctc:
   upsampler_dropout: 0.1
   upsampler_rope_theta: 10000.0
 
+semantic_prediction:
+  enabled: true
+  weight: 0.25
+  future_horizons: [1, 2, 4]
+
 data:
   dataset_id: hf-internal-testing/librispeech_asr_dummy
   fallback_dataset_id: null

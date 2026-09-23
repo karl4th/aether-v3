@@ -9,11 +9,14 @@ a frozen Qwen3-4B LM (phase 2, not implemented yet).
              -> Embedding(2048, 768)
              -> AetherSpeech: 8x causal streaming RoPE transformer blocks,
                 dim 768, heads 12, FFN 3072
-             -> CTC head: Linear(768, 257), byte-level UTF-8 + blank
+             ├-> CTC head: byte-level UTF-8 + blank
+             └-> training-only future-q0 prediction heads (1/2/4 frames)
 ```
 
-Phase 1 goal: get the CTC branch recognizing English speech decently on its
-own (LibriSpeech) before wiring up the LM branch.
+Phase 1 uses a joint objective: CTC measures exact linguistic recovery, while
+causal future-q0 prediction prevents transcript supervision from being the only
+information preserved by AetherSpeech. Both diagnostic heads are discarded for
+the production encoder.
 
 ## Setup
 

@@ -1,4 +1,4 @@
-# AETHER STT v0.1 — phase 1 (CTC branch only) base experiment config.
+# AETHER STT v0.1 — phase 1 joint-objective base experiment config.
 # Every field here has a dataclass default in src/aether_v3/config.py;
 # this file exists so it's easy to see/edit without reading the code.
 
@@ -34,6 +34,11 @@ ctc:
   upsampler_ffn_size: 3072
   upsampler_dropout: 0.1
   upsampler_rope_theta: 10000.0
+
+semantic_prediction:
+  enabled: true
+  weight: 0.25
+  future_horizons: [1, 2, 4]
 
 data:
   dataset_id: openslr/librispeech_asr

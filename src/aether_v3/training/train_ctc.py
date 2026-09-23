@@ -209,6 +209,8 @@ def evaluate(
     all_refs: list[str] = []
     all_hyps: list[str] = []
     total_loss = 0.0
+    total_ctc_loss = 0.0
+    total_semantic_loss = 0.0
     n_batches = 0
     batches = tqdm(
         loader,
@@ -222,15 +224,24 @@ def evaluate(
         batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
         up_input_lengths = batch["input_lengths"] * upsample_factor
         with _amp_autocast(device, amp_dtype):
-            log_probs = model(batch["semantic_codes"], batch["attention_mask"])
-            loss = compute_ctc_loss(
+            outputs = model(
+                batch["semantic_codes"],
+                batch["attention_mask"],
+                compute_semantic_loss=True,
+            )
+            assert isinstance(outputs, tuple)
+            log_probs, semantic_loss = outputs
+            ctc_loss = compute_ctc_loss(
                 log_probs,
                 batch["targets"],
                 up_input_lengths,
                 batch["target_lengths"],
                 blank_id,
             )
+            loss = ctc_loss + unwrap_model(model).semantic_prediction_weight * semantic_loss
         total_loss += loss.item()
+        total_ctc_loss += ctc_loss.item()
+        total_semantic_loss += semantic_loss.item()
         n_batches += 1
         hyps = greedy_ctc_decode(log_probs.float().cpu(), up_input_lengths.cpu(), blank_id)
         refs = targets_to_texts(batch["targets"].cpu(), batch["target_lengths"].cpu())
@@ -239,6 +250,8 @@ def evaluate(
     model.train()
     return {
         "loss": total_loss / max(1, n_batches),
+        "ctc_loss": total_ctc_loss / max(1, n_batches),
+        "semantic_loss": total_semantic_loss / max(1, n_batches),
         "wer": compute_wer(all_refs, all_hyps),
         "cer": compute_cer(all_refs, all_hyps),
         "examples": list(zip(all_refs[:5], all_hyps[:5], strict=True)),
@@ -290,7 +303,7 @@ def run_training(config: ExperimentConfig) -> Path:
         seed=config.train.seed,
     )
 
-    raw_model = AetherCTCModel(config.aether_speech, config.ctc)
+    raw_model = AetherCTCModel(config.aether_speech, config.ctc, config.semantic_prediction)
     if config.train.init_encoder_from:
         load_encoder_weights(config.train.init_encoder_from, raw_model.encoder)
     ctc_upsample_factor = raw_model.upsample_factor
@@ -357,6 +370,8 @@ def run_training(config: ExperimentConfig) -> Path:
         skip_batches=batches_in_epoch,
     )
     running_loss = 0.0
+    running_ctc_loss = 0.0
+    running_semantic_loss = 0.0
     steps_since_log = 0
     t0 = time.time()
     termination_reason: str | None = None
@@ -369,6 +384,8 @@ def run_training(config: ExperimentConfig) -> Path:
     try:
         while step < config.train.max_steps and stop_request.signal_name is None:
             step_loss = torch.zeros((), device=device)
+            step_ctc_loss = torch.zeros((), device=device)
+            step_semantic_loss = torch.zeros((), device=device)
             for micro_step in range(config.train.grad_accum_steps):
                 try:
                     batch = next(data_iter)
@@ -391,13 +408,23 @@ def run_training(config: ExperimentConfig) -> Path:
                     sync_ctx = model.no_sync()
                 with sync_ctx:
                     with _amp_autocast(device, amp_dtype):
-                        log_probs = model(batch["semantic_codes"], batch["attention_mask"])
-                        loss = compute_ctc_loss(
+                        outputs = model(
+                            batch["semantic_codes"],
+                            batch["attention_mask"],
+                            compute_semantic_loss=True,
+                        )
+                        assert isinstance(outputs, tuple)
+                        log_probs, semantic_loss = outputs
+                        ctc_loss = compute_ctc_loss(
                             log_probs,
                             batch["targets"],
                             batch["input_lengths"] * ctc_upsample_factor,
                             batch["target_lengths"],
                             blank_id,
+                        )
+                        loss = (
+                            ctc_loss
+                            + unwrap_model(model).semantic_prediction_weight * semantic_loss
                         )
                         loss = loss / config.train.grad_accum_steps
                     if not _is_finite_across_ranks(loss):
@@ -405,6 +432,8 @@ def run_training(config: ExperimentConfig) -> Path:
                         break
                     loss.backward()
                     step_loss += loss.detach()
+                    step_ctc_loss += ctc_loss.detach() / config.train.grad_accum_steps
+                    step_semantic_loss += semantic_loss.detach() / config.train.grad_accum_steps
             if termination_reason:
                 break
 
@@ -421,11 +450,15 @@ def run_training(config: ExperimentConfig) -> Path:
             progress.update(1)
             steps_since_log += 1
             running_loss += float(step_loss.item())
+            running_ctc_loss += float(step_ctc_loss.item())
+            running_semantic_loss += float(step_semantic_loss.item())
 
             should_log = step in _EARLY_LOG_STEPS or steps_since_log >= config.train.log_interval
             if is_main_process() and should_log:
                 elapsed = time.time() - t0
                 avg_loss = running_loss / steps_since_log
+                avg_ctc_loss = running_ctc_loss / steps_since_log
+                avg_semantic_loss = running_semantic_loss / steps_since_log
                 lr = scheduler.get_last_lr()[0]
                 steps_per_sec = steps_since_log / elapsed if elapsed > 0 else 0.0
                 examples_per_sec = (
@@ -444,6 +477,8 @@ def run_training(config: ExperimentConfig) -> Path:
                 )
                 progress.set_postfix(
                     loss=f"{avg_loss:.4f}",
+                    ctc=f"{avg_ctc_loss:.4f}",
+                    semantic=f"{avg_semantic_loss:.4f}",
                     grad=f"{float(grad_norm):.3f}",
                     lr=f"{lr:.2e}",
                     eta=_format_duration(eta_seconds),
@@ -454,6 +489,8 @@ def run_training(config: ExperimentConfig) -> Path:
                     step=step,
                     epoch=epoch,
                     loss=avg_loss,
+                    ctc_loss=avg_ctc_loss,
+                    semantic_loss=avg_semantic_loss,
                     grad_norm=float(grad_norm),
                     lr=lr,
                     steps_per_second=steps_per_sec,
@@ -464,6 +501,8 @@ def run_training(config: ExperimentConfig) -> Path:
                     wandb_run.log(
                         {
                             "train/loss": avg_loss,
+                            "train/ctc_loss": avg_ctc_loss,
+                            "train/semantic_loss": avg_semantic_loss,
                             "train/grad_norm": float(grad_norm),
                             "train/lr": lr,
                             "train/steps_per_second": steps_per_sec,
@@ -472,6 +511,8 @@ def run_training(config: ExperimentConfig) -> Path:
                         step=step,
                     )
                 running_loss = 0.0
+                running_ctc_loss = 0.0
+                running_semantic_loss = 0.0
                 steps_since_log = 0
                 t0 = time.time()
 
@@ -496,6 +537,8 @@ def run_training(config: ExperimentConfig) -> Path:
                     assert metrics is not None
                     metric_values = {
                         "eval_loss": float(metrics["loss"]),
+                        "eval_ctc_loss": float(metrics["ctc_loss"]),
+                        "eval_semantic_loss": float(metrics["semantic_loss"]),
                         "eval_wer": float(metrics["wer"]),
                         "eval_cer": float(metrics["cer"]),
                     }
