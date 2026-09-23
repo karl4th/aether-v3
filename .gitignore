@@ -15,6 +15,7 @@ docs/*
 # state).
 data_cache/
 runs/
+recordings/
 wandb/
 *.pt
 *.ckpt
