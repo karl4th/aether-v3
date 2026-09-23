@@ -56,6 +56,7 @@ def load_loquacious_split(config: DataConfig, split: str) -> LoquaciousSemanticD
         raise ValueError("data.dataset_revision is required for hf_parquet training")
     dataset = load_dataset(
         config.dataset_id,
+        data_files={split: f"{split}/*.parquet"},
         split=split,
         revision=config.dataset_revision,
         cache_dir=str(Path(config.cache_dir)),

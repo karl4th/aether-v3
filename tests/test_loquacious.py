@@ -49,3 +49,21 @@ def test_hub_loader_requires_pinned_revision():
     config = DataConfig(dataset_revision=None)
     with pytest.raises(ValueError, match="dataset_revision is required"):
         load_loquacious_split(config, "train")
+
+
+def test_hub_loader_restricts_download_to_requested_split(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_load_dataset(dataset_id, **kwargs):
+        captured["dataset_id"] = dataset_id
+        captured.update(kwargs)
+        return _dataset()
+
+    monkeypatch.setattr("aether_v3.data.loquacious.load_dataset", fake_load_dataset)
+    config = DataConfig(cache_dir=str(tmp_path))
+    load_loquacious_split(config, "validation")
+
+    assert captured["dataset_id"] == "manifestro/stage1_aether"
+    assert captured["data_files"] == {"validation": "validation/*.parquet"}
+    assert captured["split"] == "validation"
+    assert captured["revision"] == config.dataset_revision

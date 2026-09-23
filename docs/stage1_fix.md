@@ -307,7 +307,9 @@ audit was not run locally; that belongs in the Pod preflight.
 
 The training loader now reads the private repository at the pinned revision,
 uses `HF_TOKEN` implicitly, validates required columns, and derives UTF-8 byte
-targets lazily from `normalized_text`. It never opens the reserved test split.
+targets lazily from `normalized_text`. An explicit per-split Parquet glob keeps
+validation from resolving or downloading train/test shards. The training
+entrypoint never opens the reserved test split.
 
 The new deterministic sampler groups similar lengths and limits each batch by
 both maximum examples and padded q0-frame budget. Complete batches are divided
@@ -330,7 +332,7 @@ The complete local quality gate passed:
 ruff check: passed
 ruff format --check: passed
 mypy src: passed (30 source files)
-pytest: 164 passed
+pytest: 165 passed
 git diff --check: passed
 ```
 
@@ -345,8 +347,14 @@ A synthetic CPU end-to-end exercise also completed:
 7. produced final `status: completed`.
 
 This validates local contracts only. No CUDA training, performance benchmark,
-RunPod lifecycle, Google Drive upload, Hugging Face publication, microphone
-inference, listening test, or LoquaciousSet training was performed.
+Google Drive upload, Hugging Face publication, microphone inference, listening
+test, or LoquaciousSet training was performed.
+
+A bounded RunPod smoke on an RTX 3090 validated one real validation batch at
+commit `c70267c`: 32 examples, 850 q0 frames, maximum length 37 frames, full
+joint forward/backward plus fused AdamW step, 0.697 seconds and 1.232 GiB peak
+allocated VRAM. This is an execution-contract check, not a quality result or a
+safe full-run batch-budget measurement.
 
 ## Next phase
 
