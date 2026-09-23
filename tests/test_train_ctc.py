@@ -6,6 +6,7 @@ from datasets import Dataset as HFDataset
 
 from aether_v3.config import AetherSpeechConfig, CTCConfig
 from aether_v3.data.cached_dataset import CTCCachedDataset
+from aether_v3.data.loquacious import LoquaciousSemanticDataset
 from aether_v3.models.aether_ctc_model import AetherCTCModel
 from aether_v3.training.train_ctc import (
     JsonlLogger,
@@ -72,6 +73,36 @@ def test_build_dataloader_produces_correctly_shaped_batches(tmp_path):
     assert batch["semantic_codes"].shape[1] == 8  # max length in this batch
 
 
+def test_build_dataloader_uses_semantic_frame_budget():
+    hf_ds = HFDataset.from_dict(
+        {
+            "sample_id": ["a", "b", "c"],
+            "semantic_codes": [[1] * 8, [2] * 7, [3] * 2],
+            "semantic_length": [8, 7, 2],
+            "normalized_text": ["a", "b", "c"],
+            "audio_seconds": [1.0, 2.0, 3.0],
+        }
+    )
+    ds = LoquaciousSemanticDataset(hf_ds)
+    loader, sampler = build_dataloader(
+        ds,
+        batch_size=3,
+        shuffle=False,
+        num_workers=0,
+        distributed=False,
+        drop_last=False,
+        max_semantic_frames=10,
+        bucket_size=3,
+    )
+    batches = list(loader)
+    assert sampler is not None
+    assert sum(batch["semantic_codes"].shape[0] for batch in batches) == 3
+    assert all(
+        int(batch["input_lengths"].max()) * batch["semantic_codes"].shape[0] <= 10
+        for batch in batches
+    )
+
+
 def test_evaluate_runs_end_to_end_on_tiny_model(tmp_path):
     speech_cfg = AetherSpeechConfig(
         semantic_vocab_size=16, hidden_size=8, num_layers=1, num_heads=2, ffn_size=16, dropout=0.0
@@ -104,6 +135,15 @@ def test_evaluate_runs_end_to_end_on_tiny_model(tmp_path):
         "wer",
         "cer",
         "examples",
+        "short_query_wer",
+        "short_query_examples",
+        "empty_hypothesis_rate",
+        "repetition_collapse_rate",
+        "utterance_wer_gte_100_rate",
+        "invalid_utf8_rate",
+        "mean_hypothesis_reference_length_ratio",
+        "truncated_hypothesis_rate",
+        "catastrophic_failure_rate",
     }
     assert isinstance(metrics["loss"], float)
     assert isinstance(metrics["wer"], float)

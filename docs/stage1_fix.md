@@ -275,7 +275,7 @@ Neither provider was contacted during local validation. Network authentication,
 real uploads, retry behavior under Pod shutdown, and remote checksum receipts
 remain to be tested on an authorized environment.
 
-## Private dataset contract reviewed
+## LoquaciousSet cache integration
 
 The supplied LoquaciousSet Mimi cache specification provides the minimum fields
 needed for the new Stage 1:
@@ -289,13 +289,38 @@ needed for the new Stage 1:
 - immutable dataset/model provenance;
 - shard checksums, processing statistics, and failure manifests.
 
-The intended loader will read private Parquet shards directly from a pinned
-Hugging Face revision and derive byte targets from `normalized_text`. It will
-not create another full copy of the semantic-token cache.
+The published revision inspected for integration is
+`4bb733b62abd021c4a153ff5196682912933588e`. Its manifests report:
 
-Dataset integration has not started because generation is still in progress.
-The final revision, manifests, statistics, and actual Parquet schema must be
-audited before the loader and frame-budget sampler are implemented.
+- 1,089,960 successful examples and zero recorded failures;
+- 2,499.27 train hours in 101 shards;
+- 15.78 validation hours in one shard;
+- 16.60 reserved test hours in one shard;
+- 114,342,135 Mimi q0 tokens in total;
+- pinned LoquaciousSet and `kyutai/moshiko-pytorch-bf16` revisions;
+- Mimi q0 at 12.5 Hz with vocabulary size 2,048.
+
+The actual validation Parquet schema and all 7,759 validation rows were checked
+for semantic length equality, q0 code range, non-empty normalized text, and
+manifest totals. A full cross-shard checksum, uniqueness, and speaker-overlap
+audit was not run locally; that belongs in the Pod preflight.
+
+The training loader now reads the private repository at the pinned revision,
+uses `HF_TOKEN` implicitly, validates required columns, and derives UTF-8 byte
+targets lazily from `normalized_text`. It never opens the reserved test split.
+
+The new deterministic sampler groups similar lengths and limits each batch by
+both maximum examples and padded q0-frame budget. Complete batches are divided
+evenly between DDP ranks, and `epoch + batches_in_epoch` still reproduces the
+exact data position on resume. Logs now report measured examples/second and
+audio-hours/hour rather than estimating throughput from a fixed batch size.
+
+Validation now reports the required failure-oriented metrics in addition to
+aggregate WER/CER: duration-based 1–5 second short-query WER, empty hypothesis,
+four-token consecutive repetition collapse, utterance WER at or above 100%,
+invalid UTF-8 replacement, strong truncation, hypothesis/reference length
+ratio, and their catastrophic-failure union. Non-finite slice metrics are
+excluded from best-checkpoint selection.
 
 ## Validation performed
 
@@ -304,8 +329,8 @@ The complete local quality gate passed:
 ```text
 ruff check: passed
 ruff format --check: passed
-mypy src: passed (28 source files)
-pytest: 149 passed
+mypy src: passed (30 source files)
+pytest: 164 passed
 git diff --check: passed
 ```
 
@@ -325,19 +350,15 @@ inference, listening test, or LoquaciousSet training was performed.
 
 ## Next phase
 
-After the private dataset finishes publishing:
+Next:
 
-1. pin and audit the immutable dataset revision;
-2. validate every manifest, split, checksum, failure count, and schema invariant;
-3. verify sample, source, and known-speaker separation across splits;
-4. implement direct Parquet loading and UTF-8 byte-target derivation;
-5. implement length buckets and semantic-frame-budget batches;
-6. add audio-hours progress and deterministic sampler resume;
-7. implement short-query and catastrophic-failure metrics;
-8. run a bounded CUDA smoke test;
-9. compare initialization from the previous Stage 1 checkpoint against scratch;
-10. train and select the best robust streaming AetherSpeech;
-11. evaluate a fixed microphone stress set including `WHO ARE YOU` on the
+1. validate every remote checksum and schema invariant during Pod preflight;
+2. verify sample, source, and known-speaker separation across splits;
+3. benchmark and tune the semantic-frame budget on the selected GPU;
+4. run a bounded CUDA smoke test;
+5. compare initialization from the previous Stage 1 checkpoint against scratch;
+6. train and select the best robust streaming AetherSpeech;
+7. evaluate a fixed microphone stress set including `WHO ARE YOU` on the
     previously failing unseen voice.
 
 The full research target remains WER at or below 15% on diverse unseen voices,

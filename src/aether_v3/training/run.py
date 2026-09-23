@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import math
 import os
 import platform
 import socket
@@ -118,6 +119,8 @@ class MetricSelections:
             if metric not in metrics:
                 continue
             value = float(metrics[metric])
+            if not math.isfinite(value):
+                continue
             previous = self.best.get(metric)
             if previous is None or (value < previous if direction == "min" else value > previous):
                 improved.append(metric)

@@ -69,6 +69,17 @@ def test_future_dataset_aware_metrics_are_supported(tmp_path):
     }
 
 
+def test_metric_selections_ignore_nonfinite_values(tmp_path):
+    config = ExperimentConfig()
+    config.train.runs_dir = str(tmp_path)
+    config.train.run_id = "nonfinite-selection-run"
+    run = RunDirectory.create(config)
+    selections = MetricSelections(run)
+
+    assert selections.improvements({"short_query_wer": float("nan")}) == []
+    assert selections.improvements({"eval_loss": float("inf")}) == []
+
+
 def test_resume_opens_existing_run_without_overwriting_provenance(tmp_path):
     config = ExperimentConfig()
     config.train.runs_dir = str(tmp_path)

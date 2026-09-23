@@ -1,6 +1,6 @@
 import math
 
-from aether_v3.eval.metrics import compute_cer, compute_wer
+from aether_v3.eval.metrics import compute_cer, compute_failure_metrics, compute_wer
 
 
 def test_perfect_match_is_zero():
@@ -27,3 +27,23 @@ def test_all_empty_strings_do_not_crash():
 def test_completely_wrong_hypothesis_is_high_error():
     wer = compute_wer(["one two three"], ["completely different text"])
     assert wer >= 1.0
+
+
+def test_failure_metrics_detect_wh_repetition_and_empty_output():
+    metrics = compute_failure_metrics(
+        ["WHO ARE YOU", "HELLO THERE"],
+        ["WH WH WH WH", ""],
+        [2.0, 6.0],
+    )
+    assert metrics["short_query_examples"] == 1.0
+    assert metrics["short_query_wer"] >= 1.0
+    assert metrics["repetition_collapse_rate"] == 0.5
+    assert metrics["empty_hypothesis_rate"] == 0.5
+    assert metrics["catastrophic_failure_rate"] == 1.0
+
+
+def test_failure_metrics_perfect_outputs_are_not_catastrophic():
+    metrics = compute_failure_metrics(["A B", "C"], ["A B", "C"], [1.0, 5.0])
+    assert metrics["short_query_wer"] == 0.0
+    assert metrics["catastrophic_failure_rate"] == 0.0
+    assert metrics["mean_hypothesis_reference_length_ratio"] == 1.0

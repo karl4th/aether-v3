@@ -21,15 +21,17 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, Dataset, DistributedSampler, Sampler
 from tqdm.auto import tqdm
 
 from aether_v3.config import ExperimentConfig, load_config
 from aether_v3.data.cached_dataset import CTCCachedDataset
 from aether_v3.data.collate import collate_ctc_batch
+from aether_v3.data.frame_batch_sampler import FrameBudgetBatchSampler
+from aether_v3.data.loquacious import dataset_lengths, load_loquacious_split
 from aether_v3.data.tokenizer import byte_ids_to_text
 from aether_v3.eval.decode import greedy_ctc_decode
-from aether_v3.eval.metrics import compute_cer, compute_wer
+from aether_v3.eval.metrics import compute_cer, compute_failure_metrics, compute_wer
 from aether_v3.models.aether_ctc_model import AetherCTCModel
 from aether_v3.models.ctc_head import compute_ctc_loss
 from aether_v3.training.artifacts import (
@@ -125,14 +127,37 @@ def _is_finite_across_ranks(value: torch.Tensor) -> bool:
 
 
 def build_dataloader(
-    dataset: CTCCachedDataset,
+    dataset: Dataset,
     batch_size: int,
     shuffle: bool,
     num_workers: int,
     distributed: bool,
     drop_last: bool,
     seed: int = 0,
-) -> tuple[DataLoader, DistributedSampler | None]:
+    max_semantic_frames: int | None = None,
+    bucket_size: int = 512,
+) -> tuple[DataLoader, Sampler | None]:
+    lengths = dataset_lengths(dataset)
+    if max_semantic_frames is not None and lengths is not None:
+        batch_sampler = FrameBudgetBatchSampler(
+            lengths,
+            max_frames=max_semantic_frames,
+            max_examples=batch_size,
+            shuffle=shuffle,
+            seed=seed,
+            bucket_size=bucket_size,
+            rank=get_rank() if distributed else 0,
+            world_size=get_world_size() if distributed else 1,
+        )
+        loader = DataLoader(
+            dataset,
+            batch_sampler=batch_sampler,
+            num_workers=num_workers,
+            collate_fn=collate_ctc_batch,
+            pin_memory=True,
+        )
+        return loader, batch_sampler
+
     sampler: DistributedSampler | None = None
     use_shuffle = shuffle
     if distributed:
@@ -155,14 +180,15 @@ def build_dataloader(
 
 def _iter_epoch(
     loader: DataLoader,
-    sampler: DistributedSampler | None,
+    sampler: Sampler | None,
     *,
     seed: int,
     epoch: int,
     skip_batches: int = 0,
 ):
-    if sampler is not None:
-        sampler.set_epoch(epoch)
+    set_epoch = getattr(sampler, "set_epoch", None)
+    if set_epoch is not None:
+        set_epoch(epoch)
     if loader.generator is not None:
         loader.generator.manual_seed(seed + epoch)
     iterator = iter(loader)
@@ -208,6 +234,7 @@ def evaluate(
     upsample_factor = unwrap_model(model).upsample_factor
     all_refs: list[str] = []
     all_hyps: list[str] = []
+    all_audio_seconds: list[float] = []
     total_loss = 0.0
     total_ctc_loss = 0.0
     total_semantic_loss = 0.0
@@ -247,8 +274,10 @@ def evaluate(
         refs = targets_to_texts(batch["targets"].cpu(), batch["target_lengths"].cpu())
         all_hyps.extend(hyps)
         all_refs.extend(refs)
+        if "audio_seconds" in batch:
+            all_audio_seconds.extend(batch["audio_seconds"].float().cpu().tolist())
     model.train()
-    return {
+    metrics = {
         "loss": total_loss / max(1, n_batches),
         "ctc_loss": total_ctc_loss / max(1, n_batches),
         "semantic_loss": total_semantic_loss / max(1, n_batches),
@@ -256,6 +285,14 @@ def evaluate(
         "cer": compute_cer(all_refs, all_hyps),
         "examples": list(zip(all_refs[:5], all_hyps[:5], strict=True)),
     }
+    metrics.update(
+        compute_failure_metrics(
+            all_refs,
+            all_hyps,
+            all_audio_seconds if len(all_audio_seconds) == len(all_refs) else None,
+        )
+    )
+    return metrics
 
 
 def run_training(config: ExperimentConfig) -> Path:
@@ -281,9 +318,17 @@ def run_training(config: ExperimentConfig) -> Path:
     assert run_path is not None
     run = RunDirectory.resume(run_path)
 
-    cache_dir = Path(config.data.cache_dir)
-    train_ds = CTCCachedDataset(cache_dir / "train")
-    val_ds = CTCCachedDataset(cache_dir / "validation")
+    train_ds: Dataset
+    val_ds: Dataset
+    if config.data.backend == "hf_parquet":
+        train_ds = load_loquacious_split(config.data, config.data.train_split)
+        val_ds = load_loquacious_split(config.data, config.data.validation_split)
+    elif config.data.backend == "local_arrow":
+        cache_dir = Path(config.data.cache_dir)
+        train_ds = CTCCachedDataset(cache_dir / "train")
+        val_ds = CTCCachedDataset(cache_dir / "validation")
+    else:
+        raise ValueError(f"unsupported data backend: {config.data.backend!r}")
     train_loader, train_sampler = build_dataloader(
         train_ds,
         config.train.batch_size,
@@ -292,6 +337,8 @@ def run_training(config: ExperimentConfig) -> Path:
         distributed=distributed,
         drop_last=True,
         seed=config.train.seed,
+        max_semantic_frames=config.data.max_semantic_frames_per_batch,
+        bucket_size=config.data.length_bucket_size,
     )
     val_loader, _ = build_dataloader(
         val_ds,
@@ -301,6 +348,8 @@ def run_training(config: ExperimentConfig) -> Path:
         distributed=False,
         drop_last=False,
         seed=config.train.seed,
+        max_semantic_frames=config.data.max_semantic_frames_per_batch,
+        bucket_size=config.data.length_bucket_size,
     )
 
     raw_model = AetherCTCModel(config.aether_speech, config.ctc, config.semantic_prediction)
@@ -372,6 +421,8 @@ def run_training(config: ExperimentConfig) -> Path:
     running_loss = 0.0
     running_ctc_loss = 0.0
     running_semantic_loss = 0.0
+    running_examples = 0
+    running_semantic_frames = 0
     steps_since_log = 0
     t0 = time.time()
     termination_reason: str | None = None
@@ -386,6 +437,8 @@ def run_training(config: ExperimentConfig) -> Path:
             step_loss = torch.zeros((), device=device)
             step_ctc_loss = torch.zeros((), device=device)
             step_semantic_loss = torch.zeros((), device=device)
+            step_examples = 0
+            step_semantic_frames = 0
             for micro_step in range(config.train.grad_accum_steps):
                 try:
                     batch = next(data_iter)
@@ -397,6 +450,9 @@ def run_training(config: ExperimentConfig) -> Path:
                     )
                     batch = next(data_iter)
                 batches_in_epoch += 1
+
+                step_examples += int(batch["input_lengths"].numel())
+                step_semantic_frames += int(batch["input_lengths"].sum().item())
 
                 batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
                 is_last_micro_step = micro_step == config.train.grad_accum_steps - 1
@@ -452,6 +508,8 @@ def run_training(config: ExperimentConfig) -> Path:
             running_loss += float(step_loss.item())
             running_ctc_loss += float(step_ctc_loss.item())
             running_semantic_loss += float(step_semantic_loss.item())
+            running_examples += step_examples
+            running_semantic_frames += step_semantic_frames
 
             should_log = step in _EARLY_LOG_STEPS or steps_since_log >= config.train.log_interval
             if is_main_process() and should_log:
@@ -461,12 +519,11 @@ def run_training(config: ExperimentConfig) -> Path:
                 avg_semantic_loss = running_semantic_loss / steps_since_log
                 lr = scheduler.get_last_lr()[0]
                 steps_per_sec = steps_since_log / elapsed if elapsed > 0 else 0.0
-                examples_per_sec = (
-                    steps_per_sec
-                    * config.train.batch_size
-                    * config.train.grad_accum_steps
-                    * get_world_size()
-                )
+                examples_per_sec = running_examples * get_world_size() / elapsed
+                # q0 is 12.5 Hz. This is numerically audio-hours processed
+                # per wall-clock hour because both numerator and denominator
+                # are converted from seconds by the same factor of 3600.
+                audio_hours_per_hour = running_semantic_frames / 12.5 / elapsed * get_world_size()
                 eta_seconds = (
                     (config.train.max_steps - step) / steps_per_sec
                     if steps_per_sec > 0
@@ -495,6 +552,7 @@ def run_training(config: ExperimentConfig) -> Path:
                     lr=lr,
                     steps_per_second=steps_per_sec,
                     examples_per_second=examples_per_sec,
+                    audio_hours_per_hour=audio_hours_per_hour,
                     vram_allocated_gib=vram_allocated,
                 )
                 if wandb_run:
@@ -506,6 +564,8 @@ def run_training(config: ExperimentConfig) -> Path:
                             "train/grad_norm": float(grad_norm),
                             "train/lr": lr,
                             "train/steps_per_second": steps_per_sec,
+                            "train/examples_per_second": examples_per_sec,
+                            "train/audio_hours_per_hour": audio_hours_per_hour,
                             "system/vram_allocated_gib": vram_allocated,
                         },
                         step=step,
@@ -513,6 +573,8 @@ def run_training(config: ExperimentConfig) -> Path:
                 running_loss = 0.0
                 running_ctc_loss = 0.0
                 running_semantic_loss = 0.0
+                running_examples = 0
+                running_semantic_frames = 0
                 steps_since_log = 0
                 t0 = time.time()
 
@@ -541,6 +603,10 @@ def run_training(config: ExperimentConfig) -> Path:
                         "eval_semantic_loss": float(metrics["semantic_loss"]),
                         "eval_wer": float(metrics["wer"]),
                         "eval_cer": float(metrics["cer"]),
+                        "short_query_wer": float(metrics["short_query_wer"]),
+                        "catastrophic_failure_rate": float(metrics["catastrophic_failure_rate"]),
+                        "repetition_collapse_rate": float(metrics["repetition_collapse_rate"]),
+                        "empty_hypothesis_rate": float(metrics["empty_hypothesis_rate"]),
                     }
                     evaluation_path = run.path / "evaluations" / f"validation_step_{step:08d}.json"
                     evaluation_path.write_text(

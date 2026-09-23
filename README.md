@@ -83,24 +83,30 @@ is configured.
 
 ## Data-cache status
 
-`prepare_cache` downloads ~30GB of raw LibriSpeech audio, but the extracted
-result it actually needs to keep (semantic codes + byte targets) is only
-~100-150MB, and extraction is CPU-decode-bound - it doesn't benefit from a
-strong GPU. So the notebook workflow is split in two:
+The production Stage 1 config reads `manifestro/stage1_aether` at the immutable
+revision recorded in `configs/ctc_base.yaml`. Hugging Face authentication comes
+from `HF_TOKEN`; no token is stored in the config or run artifacts. The loader
+reads the published Parquet split, validates the required columns, and derives
+UTF-8 byte targets lazily from `normalized_text`.
 
-The old notebook workflow has been removed. Data-cache design is intentionally
-pending the contract audit for the new private Stage 1 dataset. Training itself
-is a normal Python process suitable for a persistent GPU Pod.
+Training batches are bucketed by `semantic_length` and bounded by both example
+count and padded semantic-frame budget. The sampler is deterministic per epoch,
+partitions complete batches evenly across DDP ranks, and supports exact resume
+through the checkpoint's epoch and consumed-batch position. The official test
+split is not opened by the training entrypoint.
 
-Re-running `prepare_data.ipynb` is only needed if `configs/ctc_base.yaml`'s
-data settings change - a mismatched fingerprint makes `prepare_cache` raise
-rather than silently reusing a stale cache.
+Validation records overall WER/CER plus duration-based short-query WER and
+explicit catastrophic-output rates (empty, repeated, truncated, invalid UTF-8,
+and utterance WER at or above 100%).
+
+The legacy LibriSpeech extraction code and `local_arrow` backend remain for
+bounded comparison runs; they are not used by the production config.
 
 ## Layout
 
 - `src/aether_v3/config.py` — experiment config dataclasses + YAML loader.
-- `src/aether_v3/data/` — LibriSpeech loading, byte tokenizer, offline Mimi
-  extraction/caching, collate, Drive cache mirroring (`cache_sync.py`).
+- `src/aether_v3/data/` — pinned Loquacious Parquet loading, deterministic
+  frame-budget batching, byte tokenizer, legacy Mimi extraction, and collate.
 - `src/aether_v3/models/` — frozen Mimi wrapper, RoPE, `AetherSpeech`
   encoder, CTC head, the combined `AetherCTCModel`.
 - `src/aether_v3/training/` — DDP-ready training loop, optimizer groups,

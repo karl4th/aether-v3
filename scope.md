@@ -329,7 +329,10 @@ frozen AetherSpeech
 
 Прочитать фактическую документацию и схему `manifestro/stage1_aether`,
 зафиксировать immutable revision, splits, provenance, статистику и loader
-contract.
+contract. Ревизия `4bb733b62abd021c4a153ff5196682912933588e` зафиксирована;
+manifest и validation schema проверены, loader и детерминированный
+frame-budget sampler реализованы. Полная проверка checksum, uniqueness и
+speaker overlap переносится в preflight на Pod.
 
 ### Phase 1 — Training/evaluation harness validation
 

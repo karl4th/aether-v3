@@ -9,11 +9,16 @@ input shape.
 
 from __future__ import annotations
 
+from typing import cast
+
 import torch
 
 
-def collate_ctc_batch(batch: list[tuple[torch.Tensor, torch.Tensor]]) -> dict[str, torch.Tensor]:
-    codes_list, target_list = zip(*batch, strict=True)
+def collate_ctc_batch(
+    batch: list[tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, float]],
+) -> dict[str, torch.Tensor]:
+    codes_list = tuple(sample[0] for sample in batch)
+    target_list = tuple(sample[1] for sample in batch)
 
     input_lengths = torch.tensor([c.numel() for c in codes_list], dtype=torch.long)
     target_lengths = torch.tensor([t.numel() for t in target_list], dtype=torch.long)
@@ -27,10 +32,16 @@ def collate_ctc_batch(batch: list[tuple[torch.Tensor, torch.Tensor]]) -> dict[st
 
     targets = torch.cat(target_list) if target_list else torch.zeros(0, dtype=torch.long)
 
-    return {
+    result = {
         "semantic_codes": padded_codes,
         "attention_mask": attention_mask,
         "input_lengths": input_lengths,
         "targets": targets,
         "target_lengths": target_lengths,
     }
+    if all(len(sample) == 3 for sample in batch):
+        result["audio_seconds"] = torch.tensor(
+            [float(cast(tuple[torch.Tensor, torch.Tensor, float], sample)[2]) for sample in batch],
+            dtype=torch.float32,
+        )
+    return result

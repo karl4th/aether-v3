@@ -41,33 +41,15 @@ semantic_prediction:
   future_horizons: [1, 2, 4]
 
 data:
-  dataset_id: openslr/librispeech_asr
-  fallback_dataset_id: distil-whisper/librispeech_asr
-  train_splits: ["clean/train.100", "clean/train.360"]
-  # openslr/librispeech_asr's real split keys are unsuffixed ("validation",
-  # "test") per config - "validation.clean"/"test.other" etc. don't exist
-  # and silently sent every eval-split request through fallback_dataset_id
-  # instead (a GeneratorBasedBuilder, much slower and less reliable).
-  #
-  # Deliberately clean-only: the "other" config packs test/train.500/
-  # validation together, so requesting even other/validation forces HF to
-  # generate its ~500h, ~148k-utterance train.500 split too (confirmed:
-  # ~110-115 min one-time + another ~30GB download) just to reach a few
-  # thousand eval examples. Not worth it for phase 1 - revisit dev-other/
-  # test-other later via a source that doesn't bundle train.500 with it.
-  validation_splits: ["clean/validation"]
-  test_splits: ["clean/test"]
-  cache_dir: data_cache/ctc_base
-  sample_rate_in: 16000
-  sample_rate_out: 24000
-  min_audio_seconds: 0.5
-  max_audio_seconds: 20.0
-  # 64 OOM'd on a T4 (14.56GB, ~19.6GB+ peak needed) - fine on an A100
-  # (40/80GB) with plenty of headroom. Drop back to 16 if running on a T4
-  # again (see _encode_with_oom_retry in mimi_cache.py for the safety net
-  # either way - halves a batch and retries once on a genuine CUDA OOM).
-  extraction_batch_size: 64
-  extraction_num_workers: 8 # bump toward Colab's CPU core count if it has more
+  backend: hf_parquet
+  dataset_id: manifestro/stage1_aether
+  dataset_revision: 4bb733b62abd021c4a153ff5196682912933588e
+  train_split: train
+  validation_split: validation
+  test_split: test # reserved for final evaluation; training never opens it
+  cache_dir: data_cache/stage1_aether
+  max_semantic_frames_per_batch: 16384
+  length_bucket_size: 512
 
 train:
   runs_dir: runs

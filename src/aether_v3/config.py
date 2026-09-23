@@ -70,7 +70,15 @@ class SemanticPredictionConfig:
 
 @dataclasses.dataclass
 class DataConfig:
-    dataset_id: str = "openslr/librispeech_asr"
+    backend: str = "hf_parquet"
+    dataset_id: str = "manifestro/stage1_aether"
+    dataset_revision: str | None = "4bb733b62abd021c4a153ff5196682912933588e"
+    train_split: str = "train"
+    validation_split: str = "validation"
+    test_split: str = "test"
+    # Legacy LibriSpeech extraction inputs. They remain available for the
+    # local_arrow backend and cache-building tools, but are not used by the
+    # published LoquaciousSet semantic cache.
     fallback_dataset_id: str = "distil-whisper/librispeech_asr"
     # Each entry is "<hf_config_name>/<split_name>", e.g. "clean/train.100".
     train_splits: list[str] = dataclasses.field(
@@ -89,6 +97,10 @@ class DataConfig:
     # Parallel CPU workers decoding/resampling audio during extraction, so
     # decode overlaps with Mimi's GPU encode instead of blocking it.
     extraction_num_workers: int = 4
+    # Dynamic batches are capped by both examples and total unpadded Mimi
+    # frames. At q0's 12.5 Hz, 16,384 frames are about 21.8 audio-minutes.
+    max_semantic_frames_per_batch: int = 16_384
+    length_bucket_size: int = 512
 
 
 @dataclasses.dataclass

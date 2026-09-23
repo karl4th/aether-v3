@@ -36,6 +36,8 @@ semantic_prediction:
   future_horizons: [1, 2, 4]
 
 data:
+  backend: local_arrow
+  dataset_revision: null
   dataset_id: hf-internal-testing/librispeech_asr_dummy
   fallback_dataset_id: null
   train_splits: ["clean/validation"]
@@ -48,6 +50,8 @@ data:
   max_audio_seconds: 30.0
   extraction_batch_size: 8
   extraction_num_workers: 0 # dataset is 73 examples, not worth process overhead
+  max_semantic_frames_per_batch: 16384
+  length_bucket_size: 512
 
 train:
   runs_dir: runs
