@@ -2,11 +2,38 @@
 
 **Author:** Manifestro  
 **Started:** 2026-09-22  
-**Status:** In progress — full frozen-R1 training and Phase 7A transcription evaluation complete
+**Updated:** 2026-09-23
+
+**Status:** Publication candidate — current experimental pass documented through Phase 7A, with preliminary Phase 7B evidence
 
 **Specification:** `docs/stage2_spec.md`
 
 ---
+
+## Executive summary
+
+Aether Stage 2 demonstrates a direct continuous speech-to-LLM path:
+
+```text
+audio -> frozen Mimi q0 -> frozen AetherSpeech -> trained AetherConnector
+      -> frozen Qwen3-4B -> text
+```
+
+No transcript, CTC logits, byte sequence, or other text intermediate is fed
+to Qwen at inference time. The selected native-rate R1 Connector was trained
+on 132,553 LibriSpeech utterances while AetherSpeech and Qwen3-4B remained
+frozen. Complete-split greedy evaluation produced 17.29% WER on 2,703
+validation utterances and 16.83% WER on 2,620 test utterances. Test loss and
+validation loss were nearly identical, providing no evidence of material
+overfitting.
+
+A separate 4-bit live inference harness exercised the complete audio path.
+On a clean synthetic question, the transcription was exact on its first
+line and the direct-answer prompt produced the correct fact, `Paris`. The
+generation then continued with unrelated tokens rather than terminating, so
+this is evidence that semantic content reaches Qwen, not completion of a
+semantic-understanding benchmark. The published report can be shared while
+all model repositories and weights remain private.
 
 ## 1. Research question
 
@@ -40,7 +67,7 @@ training loop work before a Qwen3-4B experiment is started.
 | Phase 5 | Full ~460-hour R1 training | **Complete** |
 | Phase 6 | Text-teacher KD | Deferred pending a demonstrated need |
 | Phase 7A | Full transcription validation and test | **Complete** |
-| Phase 7B | Semantic speech understanding | Pending |
+| Phase 7B | Semantic speech understanding | **Preliminary clean-TTS evidence; benchmark not complete** |
 
 This report is cumulative. Results from later phases will be appended rather
 than replacing the Phase 0 evidence.
@@ -647,3 +674,164 @@ The checkpoint intentionally contains trainable Connector and boundary
 embedding state plus training metadata. Frozen Mimi, AetherSpeech, and
 Qwen3-4B weights are referenced separately and are not duplicated in this
 file.
+
+## 24. Portable full-pipeline inference harness
+
+`notebooks/stage2/stage2_phase7b_live_rtx3060.ipynb` loads every component
+needed for live inference:
+
+```text
+audio file
+  -> Mimi semantic codebook q0
+  -> AetherSpeech checkpoint at step 200,000
+  -> R1 Connector checkpoint at step 12,000
+  -> Qwen3-4B
+  -> greedy text generation
+```
+
+The harness uses NF4 4-bit Qwen weights with double quantization and FP16
+compute so the model can later be tested on a 12 GB RTX 3060. The reported
+run used Git commit `da2e2366c0d76781347a98273e2f0941415c3a14`, PyTorch
+2.11.0+cu128, Transformers 5.17.0, and an NVIDIA RTX PRO 6000 Blackwell
+Server Edition with 94.97 GB VRAM.
+
+Model construction took 32.81 seconds. After loading, allocated VRAM was
+2.74 GB. The clean-France run peaked at 3.24 GB allocated and returned to
+2.75 GB after inference. These memory figures include 4-bit Qwen and cannot
+be treated as BF16 memory requirements.
+
+The notebook records component timing, first-request latency, deterministic
+warm-run p50/p90, tokens per second, real-time factor, VRAM, software and
+hardware versions, Git revision, checkpoint steps, audio statistics, and
+SHA-256. Each run is written beside the input audio as `*.aether.json`.
+
+## 25. Clean-TTS and live speech observations
+
+Three clean TTS questions and one informal microphone question were used as
+diagnostic probes. They were not selected from a registered benchmark and
+must not be presented as aggregate accuracy measurements.
+
+### 25.1 Clean France question
+
+The 5.8-second file asked:
+
+```text
+HELLO HOW ARE YOU TELL ME PLEASE WHAT IS THE CAPITAL OF FRANCE
+```
+
+The first generated transcription line matched exactly. Generation then
+emitted a closing thinking tag and repeated the transcript, so the complete
+raw generation violated the requested output-only format.
+
+With the direct-answer prefix, the output included the correct answer:
+
+```text
+(PARIS)
+```
+
+It first repeated the spoken question and then continued with an unrelated
+sequence of years until the 96-token limit. This probe demonstrates that the
+speech path preserved enough semantic information to activate relevant Qwen
+knowledge on one clean example. It does not establish reliable question
+answering, instruction following, or EOS behavior.
+
+### 25.2 Clean Kazakhstan question
+
+The same question template ending in `KAZAKHSTAN` was transcribed as
+`COXSTAN`; the remaining words were correct. The direct-answer generation
+then answered a question about the nonexistent entity it had perceived and
+did not produce `Astana`. This isolates a practical failure mode: a localized
+acoustic error in a key entity can make the downstream semantic answer
+fluent but wrong.
+
+### 25.3 Clean dataset question
+
+In a third clean probe, `DATASET` was perceived as `DATE ASKED`. The first
+transcription line otherwise preserved the sentence. Direct-answer generation
+did not produce a useful answer and ran to its token limit.
+
+### 25.4 Informal microphone question
+
+An informal microphone recording asking for the capital of Great Britain was
+only partially recognized. Because it was a single uncontrolled recording
+with no registered capture conditions, it is recorded as evidence of a
+domain-transfer weakness rather than a benchmark result.
+
+## 26. Inference latency
+
+The clean-France file contained 5.8 seconds of audio. Timings on the RTX PRO
+6000 were:
+
+| Operation | First measured latency |
+|---|---:|
+| Audio load and resample | 0.001 s |
+| Mimi transfer to GPU | 0.026 s |
+| Mimi encode | 0.011 s |
+| Mimi release to CPU | 0.322 s |
+| AetherSpeech | 0.003 s |
+| Front end total | **0.363 s** |
+| Transcription generation | 0.597 s |
+| Transcription end to end | **0.960 s** |
+| Direct-answer generation | 1.573 s |
+| Direct-answer end to end | **1.937 s** |
+
+Warm transcription generation measured 0.594 s p50 and 0.594 s p90 across
+three deterministic repeats. Warm direct-answer generation measured 1.575 s
+p50 and 1.578 s p90. Transcription real-time factor was 0.166, approximately
+6.0 times faster than the audio duration; direct-answer real-time factor was
+0.334, approximately 3.0 times faster than the audio duration.
+
+These values characterize an RTX PRO 6000 Blackwell session after CUDA and
+model warmup. They do not predict RTX 3060 latency. The first notebook run
+showed substantial one-time kernel warmup cost. Time-to-first-token is not
+instrumented separately, and answer latency is capped by a failed generation
+that exhausted the 96-token limit.
+
+Mimi's return to CPU accounted for most of the warm front-end latency. The
+observed VRAM headroom suggests that keeping Mimi resident on GPU may remove
+most of that 0.322-second transfer cost, but this optimization has not been
+validated on the target RTX 3060.
+
+## 27. Conclusions and limits
+
+The current evidence supports the following claims:
+
+1. The complete audio-to-LLM implementation works with live, non-cached
+   audio; it does not rely only on precomputed training states.
+2. A frozen Qwen3-4B can generate coherent transcripts from frozen
+   AetherSpeech states through a trained R1 Connector.
+3. Full validation and test results are close, with no observed material
+   overfitting.
+4. On one clean synthetic question, Qwen produced the correct fact from the
+   speech path without semantic QA fine-tuning.
+5. The 4-bit pipeline is comfortably below 12 GB VRAM on the tested hardware.
+
+The evidence does not support the following stronger claims:
+
+- Stage 2 does not yet outperform the Stage 1 CTC baseline on transcription.
+- Semantic question answering is not yet reliable or benchmarked.
+- Generation does not reliably follow the requested short format or stop at
+  EOS under 4-bit inference.
+- Generalization to uncontrolled microphone speech and diverse accents is
+  not established.
+- NF4 and BF16 output parity has not been measured.
+- RTX 3060 latency has not yet been measured.
+
+The first catastrophic test result was traced to an invalid cache built with
+an unloaded Stage 1 encoder and was fully superseded by a corrected rebuild.
+Keeping this incident in the report is intentional: it documents why a live
+end-to-end check is required even when cached-state evaluation is healthy.
+
+## 28. Next steps — pending discussion
+
+The next experimental direction is deliberately left open. It will be chosen
+after review of this report and the current evidence.
+
+| Area | Decision |
+|---|---|
+| Stage 1 data and adaptation | To be discussed |
+| Stage 2 semantic evaluation | To be discussed |
+| Generation control and EOS | To be discussed |
+| BF16 versus NF4 comparison | To be discussed |
+| RTX 3060 deployment benchmark | To be discussed |
+| Private unified model packaging | To be discussed |
