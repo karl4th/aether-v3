@@ -657,23 +657,12 @@ portable loader must restore and verify Mimi, Stage 1 AetherSpeech, Connector,
 and Qwen revisions before processing audio. Cached-state evaluation alone
 cannot verify that the live audio encoder has been loaded correctly.
 
-## 23. Published Stage 2 checkpoint
+## 23. Checkpoint retention
 
-The selected trainable Stage 2 checkpoint is published in the private
-Hugging Face model repository at `manifestro/aether`, path
-`stage2/best_wer.pt`. The upload commit is
-`72c36762c210d190bbabf753c321edad32bb5957`.
-
-The 75.6 MB file was downloaded after upload and matched the local artifact:
-
-```text
-SHA-256 fa0348fae894f77548f0bba7a5774ea504467ec2c92b269d64e9365eb1babc16
-```
-
-The checkpoint intentionally contains trainable Connector and boundary
-embedding state plus training metadata. Frozen Mimi, AetherSpeech, and
-Qwen3-4B weights are referenced separately and are not duplicated in this
-file.
+The selected step-12,000 checkpoint is archived privately and is not part of
+this publication. It contains the trainable Connector and boundary embedding
+state plus training metadata. Frozen base-model weights are not duplicated in
+the checkpoint.
 
 ## 24. Portable full-pipeline inference harness
 
