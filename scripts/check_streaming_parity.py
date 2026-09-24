@@ -6,12 +6,12 @@ import argparse
 import json
 
 import torch
-from aether_v3.training.decode import greedy_ctc_decode
-from aether_v3.training.metrics import compute_cer, compute_wer
 
 from aether_v3.config import load_config
 from aether_v3.data.loquacious import load_loquacious_split
 from aether_v3.data.tokenizer import byte_ids_to_text
+from aether_v3.eval.decode import greedy_ctc_decode
+from aether_v3.eval.metrics import compute_cer, compute_wer
 from aether_v3.models.aether_ctc_model import AetherCTCModel
 from aether_v3.training.checkpoint import load_model_weights
 
