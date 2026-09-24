@@ -214,9 +214,7 @@ def test_randomized_causal_dependency_is_exactly_bounded_to_five_frames():
             suffix_start = timestep + speech_cfg.lookahead_frames + 1
             changed[:, suffix_start:] = (
                 changed[:, suffix_start:]
-                + torch.randint(
-                    1, speech_cfg.semantic_vocab_size, changed[:, suffix_start:].shape
-                )
+                + torch.randint(1, speech_cfg.semantic_vocab_size, changed[:, suffix_start:].shape)
             ) % speech_cfg.semantic_vocab_size
             mask = torch.ones_like(original, dtype=torch.bool)
             baseline = model(original, mask)

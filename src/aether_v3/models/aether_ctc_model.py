@@ -34,8 +34,7 @@ class AetherCTCModel(nn.Module):
         self.upsampler = CTCUpsampler(
             speech_cfg.hidden_size,
             ctc_cfg,
-            max_cache_frames=speech_cfg.streaming_left_context_frames
-            * ctc_cfg.upsample_factor,
+            max_cache_frames=speech_cfg.streaming_left_context_frames * ctc_cfg.upsample_factor,
         )
         self.ctc_head = CTCHead(speech_cfg.hidden_size, ctc_cfg.vocab_size)
         self.semantic_prediction = (
