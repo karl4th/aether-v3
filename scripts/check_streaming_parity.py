@@ -45,9 +45,7 @@ def _long_stream_diagnostic(
     model: AetherCTCModel, device: torch.device, *, minutes: int = 10
 ) -> dict[str, float | int | bool]:
     frame_count = minutes * 60 * 25 // 2
-    codes = torch.randint(
-        0, model.encoder.cfg.semantic_vocab_size, (1, frame_count), device=device
-    )
+    codes = torch.randint(0, model.encoder.cfg.semantic_vocab_size, (1, frame_count), device=device)
     encoder_state = None
     upsampler_state = None
     latencies_ms: list[float] = []
