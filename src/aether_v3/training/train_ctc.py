@@ -57,7 +57,7 @@ from aether_v3.training.dist_utils import (
 from aether_v3.training.monitoring import start_wandb_monitor
 from aether_v3.training.optimizer import build_optimizer
 from aether_v3.training.run import MetricSelections, RunDirectory
-from aether_v3.training.scheduler import build_scheduler
+from aether_v3.training.scheduler import WarmupPlateauScheduler, build_scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -398,7 +398,14 @@ def run_training(config: ExperimentConfig) -> Path:
     model: torch.nn.Module = wrap_model(raw_model, device)
     optimizer = build_optimizer(model, config.train, device)
     scheduler = build_scheduler(
-        optimizer, config.train.warmup_steps, config.train.max_steps, config.train.min_lr_ratio
+        optimizer,
+        config.train.warmup_steps,
+        config.train.max_steps,
+        config.train.min_lr_ratio,
+        schedule=config.train.lr_schedule,
+        plateau_factor=config.train.plateau_factor,
+        plateau_patience_evals=config.train.plateau_patience_evals,
+        plateau_min_delta=config.train.plateau_min_delta,
     )
 
     step = 0
@@ -638,6 +645,17 @@ def run_training(config: ExperimentConfig) -> Path:
                 )
                 if distributed:
                     dist.barrier()
+                eval_wer = float(metrics["wer"]) if metrics is not None else 0.0
+                if distributed:
+                    shared_wer = [eval_wer if is_main_process() else None]
+                    dist.broadcast_object_list(shared_wer, src=0)
+                    assert shared_wer[0] is not None
+                    eval_wer = float(shared_wer[0])
+                lr_reduced = (
+                    scheduler.step_metric(eval_wer)
+                    if isinstance(scheduler, WarmupPlateauScheduler)
+                    else False
+                )
                 t0 += time.time() - eval_t0
                 if is_main_process():
                     assert metrics is not None
@@ -671,6 +689,13 @@ def run_training(config: ExperimentConfig) -> Path:
                             )
                     if improved and event_logger is not None:
                         event_logger.log(event="new_best", step=step, metrics=improved)
+                    if lr_reduced and event_logger is not None:
+                        event_logger.log(
+                            event="lr_reduced",
+                            step=step,
+                            eval_wer=eval_wer,
+                            lr=scheduler.get_last_lr()[0],
+                        )
                     if config.artifacts.hf_model_repo_id:
                         for metric in improved:
                             selection = metric.removeprefix("eval_")

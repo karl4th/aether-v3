@@ -117,6 +117,10 @@ class TrainConfig:
     warmup_steps: int = 2000
     lr: float = 3e-4
     min_lr_ratio: float = 0.1
+    lr_schedule: str = "cosine"
+    plateau_factor: float = 0.5
+    plateau_patience_evals: int = 3
+    plateau_min_delta: float = 0.005
     weight_decay: float = 0.01
     adam_beta1: float = 0.9
     adam_beta2: float = 0.98

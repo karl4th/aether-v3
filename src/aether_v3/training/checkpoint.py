@@ -90,7 +90,7 @@ def save_training_checkpoint(
     path: str | Path,
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    scheduler: Any,
     *,
     step: int,
     epoch: int,
@@ -120,7 +120,7 @@ def load_training_checkpoint(
     path: str | Path,
     model: nn.Module,
     optimizer: torch.optim.Optimizer,
-    scheduler: torch.optim.lr_scheduler.LRScheduler,
+    scheduler: Any,
     map_location: str | torch.device = "cpu",
 ) -> dict[str, Any]:
     checkpoint = torch.load(path, map_location=map_location, weights_only=False)

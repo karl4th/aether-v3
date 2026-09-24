@@ -2,7 +2,7 @@ import math
 
 import torch
 
-from aether_v3.training.scheduler import _lr_multiplier, build_scheduler
+from aether_v3.training.scheduler import WarmupPlateauScheduler, _lr_multiplier, build_scheduler
 
 
 def test_warmup_ramps_linearly():
@@ -38,3 +38,31 @@ def test_build_scheduler_reaches_peak_lr_at_end_of_warmup():
         optimizer.step()
         scheduler.step()
     assert math.isclose(optimizer.param_groups[0]["lr"], 1.0, abs_tol=1e-6)
+
+
+def test_plateau_scheduler_holds_then_reduces_after_patience():
+    param = torch.nn.Parameter(torch.zeros(1))
+    optimizer = torch.optim.SGD([param], lr=1.0)
+    scheduler = WarmupPlateauScheduler(
+        optimizer,
+        warmup_steps=2,
+        min_lr_ratio=0.1,
+        factor=0.5,
+        patience_evals=3,
+        min_delta=0.01,
+    )
+    scheduler.step()
+    assert optimizer.param_groups[0]["lr"] == 0.5
+    scheduler.step()
+    assert optimizer.param_groups[0]["lr"] == 1.0
+    assert not scheduler.step_metric(0.8)
+    assert not scheduler.step_metric(0.795)
+    assert not scheduler.step_metric(0.794)
+    assert scheduler.step_metric(0.793)
+    assert optimizer.param_groups[0]["lr"] == 0.5
+
+
+def test_build_scheduler_rejects_unknown_schedule():
+    optimizer = torch.optim.SGD([torch.nn.Parameter(torch.zeros(1))], lr=1.0)
+    with __import__("pytest").raises(ValueError, match="unsupported lr_schedule"):
+        build_scheduler(optimizer, 10, 100, 0.1, schedule="unknown")
