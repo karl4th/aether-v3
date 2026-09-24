@@ -284,6 +284,12 @@ catastrophic failure metrics.
 - equivalent epochs;
 - elapsed time и ETA.
 
+Production training additionally has one persistent private W&B run URL. Its
+identity is derived from the immutable local run ID, so checkpoint resume must
+continue the same remote run. Successful W&B initialization is a preflight
+requirement; after that point a monitoring-network failure must not stop local
+training, checkpointing, or JSONL logging.
+
 ## 10. Диагностика обучения
 
 Во время обучения и evaluation отслеживаются:

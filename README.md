@@ -75,6 +75,21 @@ snapshots, validation reports, and independent best-loss/WER/CER selections.
 Use `train.init_encoder_from` for a fresh experiment initialized from an encoder
 and `train.resume_run_from` only to continue an interrupted run in place.
 
+The production config requires Weights & Biases monitoring. Put
+`WANDB_API_KEY` in the RunPod environment, never in YAML, then launch training
+normally. Preflight aborts before the expensive loop if the key is absent or
+the W&B run cannot be created. The resulting permanent run and project URLs
+are written to `runs/<run-id>/monitoring.json`, so the same private link can be
+opened from a phone or laptop. Resume uses the immutable local run ID as the
+W&B ID and continues the same charts instead of creating a second run.
+
+Train loss, objective components, learning rate, gradient norm, throughput,
+progress and ETA are logged under `train/*` and `progress/*`; validation
+WER/CER, failure rates, and reference/hypothesis examples are logged under
+`eval/*`. W&B also collects host/GPU telemetry. If remote logging fails after
+successful preflight, local JSONL logs and checkpoints continue and the first
+failure is recorded in `events.jsonl`.
+
 Optional artifact backups are configured under `artifacts`. Hugging Face reads
 the private token from `HF_TOKEN`; Google Drive uses Application Default
 Credentials and its optional `google-api-python-client`/`google-auth` packages.

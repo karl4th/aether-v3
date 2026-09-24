@@ -125,6 +125,11 @@ class TrainConfig:
     seed: int = 1337
     amp_dtype: str = "bfloat16"
     wandb_project: str | None = None
+    wandb_entity: str | None = None
+    wandb_group: str = "stage1"
+    wandb_tags: list[str] = dataclasses.field(default_factory=lambda: ["stage1", "streaming"])
+    wandb_required: bool = False
+    wandb_log_examples: bool = True
     # Fresh initialization imports model weights only. Resume restores the
     # complete state and continues inside the original run directory.
     init_encoder_from: str | None = None

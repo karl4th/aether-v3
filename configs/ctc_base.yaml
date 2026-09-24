@@ -71,7 +71,15 @@ train:
   num_workers: 4
   seed: 1337
   amp_dtype: bfloat16
-  wandb_project: null
+  # Production runs must create one persistent, mobile-friendly W&B URL
+  # before expensive training starts. WANDB_API_KEY is read from the Pod
+  # environment and is never stored in the run directory.
+  wandb_project: manifestro-aether-stage1
+  wandb_entity: null
+  wandb_group: stage1
+  wandb_tags: [stage1, streaming, loquacious]
+  wandb_required: true
+  wandb_log_examples: true
   init_encoder_from: null
   resume_run_from: null
   encoder_lr_multiplier: 1.0

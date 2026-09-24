@@ -14,6 +14,8 @@ def test_load_config_defaults(tmp_path: Path):
     assert cfg.aether_speech.streaming_left_context_frames == 256
     assert cfg.semantic_prediction.enabled is True
     assert cfg.semantic_prediction.future_horizons == [1, 2, 4]
+    assert cfg.train.wandb_required is False
+    assert cfg.train.wandb_tags == ["stage1", "streaming"]
 
 
 def test_load_config_overrides_only_specified_fields(tmp_path: Path):

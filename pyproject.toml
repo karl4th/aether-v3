@@ -21,6 +21,7 @@ dependencies = [
     "pyyaml>=6.0",
     "numpy>=1.26",
     "tqdm>=4.66",
+    "wandb>=0.18",
 ]
 
 [project.scripts]

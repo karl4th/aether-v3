@@ -86,8 +86,10 @@ runs/<run-id>/
 ├── config.resolved.yaml
 ├── provenance.json
 ├── status.json
+├── monitoring.json
 ├── train.jsonl
 ├── events.jsonl
+├── wandb/
 ├── checkpoints/
 ├── selections/
 ├── evaluations/
@@ -98,6 +100,21 @@ runs/<run-id>/
 The default run ID combines the experiment name, UTC timestamp, and short Git
 revision. A caller may supply an explicit ID, but an existing directory is
 never silently reused or overwritten.
+
+## One-link production monitoring
+
+The production config now treats W&B initialization as a preflight contract.
+`WANDB_API_KEY` is read only from the environment. If the secret is absent or
+the private W&B run cannot be initialized, full training does not start. Once
+initialized, `monitoring.json` records the stable run/project URLs without any
+credentials.
+
+The local run ID is also the W&B run ID. Resuming `last.pt` therefore appends to
+the same remote history and preserves one phone/laptop link across Pod restarts.
+Train/progress and evaluation metrics use separate namespaces, and evaluation
+publishes reference/hypothesis examples as a table. A later W&B network error
+does not terminate training: JSONL logs and checkpoints remain authoritative,
+and the first remote failure is recorded in `events.jsonl`.
 
 Recorded provenance currently includes:
 

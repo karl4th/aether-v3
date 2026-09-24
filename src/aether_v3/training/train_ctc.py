@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import dataclasses
 import json
 import logging
 import math
@@ -54,6 +53,7 @@ from aether_v3.training.dist_utils import (
     unwrap_model,
     wrap_model,
 )
+from aether_v3.training.monitoring import start_wandb_monitor
 from aether_v3.training.optimizer import build_optimizer
 from aether_v3.training.run import MetricSelections, RunDirectory
 from aether_v3.training.scheduler import build_scheduler
@@ -317,6 +317,9 @@ def run_training(config: ExperimentConfig) -> Path:
         run_path = shared_path[0]
     assert run_path is not None
     run = RunDirectory.resume(run_path)
+    # Establish the stable remote run before dataset downloads, model allocation,
+    # or any expensive training work. Production configs may require this preflight.
+    wandb_monitor = start_wandb_monitor(config, run.path, run.run_id) if is_main_process() else None
 
     train_ds: Dataset
     val_ds: Dataset
@@ -384,18 +387,6 @@ def run_training(config: ExperimentConfig) -> Path:
     blank_id = config.ctc.blank_id
     json_logger = JsonlLogger(run.path / "train.jsonl") if is_main_process() else None
     event_logger = JsonlLogger(run.path / "events.jsonl") if is_main_process() else None
-    wandb_run = None
-    if is_main_process() and config.train.wandb_project:
-        try:
-            import wandb
-
-            wandb_run = wandb.init(
-                project=config.train.wandb_project,
-                name=run.run_id,
-                config=dataclasses.asdict(config),
-            )
-        except ImportError:
-            logger.warning("wandb_project is set but wandb is not installed; skipping.")
 
     stop_request = StopRequest()
     previous_handlers = {
@@ -430,7 +421,12 @@ def run_training(config: ExperimentConfig) -> Path:
     if is_main_process():
         run.write_status(state="running", step=step)
         assert event_logger is not None
-        event_logger.log(event="run_started", run_id=run.run_id, step=step)
+        event_logger.log(
+            event="run_started",
+            run_id=run.run_id,
+            step=step,
+            monitoring=str(wandb_monitor.metadata_path) if wandb_monitor else None,
+        )
 
     try:
         while step < config.train.max_steps and stop_request.signal_name is None:
@@ -555,8 +551,8 @@ def run_training(config: ExperimentConfig) -> Path:
                     audio_hours_per_hour=audio_hours_per_hour,
                     vram_allocated_gib=vram_allocated,
                 )
-                if wandb_run:
-                    wandb_run.log(
+                if wandb_monitor:
+                    monitoring_error = wandb_monitor.log(
                         {
                             "train/loss": avg_loss,
                             "train/ctc_loss": avg_ctc_loss,
@@ -566,10 +562,17 @@ def run_training(config: ExperimentConfig) -> Path:
                             "train/steps_per_second": steps_per_sec,
                             "train/examples_per_second": examples_per_sec,
                             "train/audio_hours_per_hour": audio_hours_per_hour,
+                            "progress/epoch": epoch,
+                            "progress/percent": 100.0 * step / config.train.max_steps,
+                            "progress/eta_seconds": eta_seconds,
                             "system/vram_allocated_gib": vram_allocated,
                         },
                         step=step,
                     )
+                    if monitoring_error and event_logger is not None:
+                        event_logger.log(
+                            event="wandb_logging_failed", step=step, error=monitoring_error
+                        )
                 running_loss = 0.0
                 running_ctc_loss = 0.0
                 running_semantic_loss = 0.0
@@ -619,8 +622,12 @@ def run_training(config: ExperimentConfig) -> Path:
                         selections.update(metric_values, step, snapshot)
                     assert json_logger is not None
                     json_logger.log(step=step, event="validation", **metric_values)
-                    if wandb_run:
-                        wandb_run.log(metric_values, step=step)
+                    if wandb_monitor:
+                        monitoring_error = wandb_monitor.log_evaluation(metrics, step=step)
+                        if monitoring_error and event_logger is not None:
+                            event_logger.log(
+                                event="wandb_logging_failed", step=step, error=monitoring_error
+                            )
                     if improved and event_logger is not None:
                         event_logger.log(event="new_best", step=step, metrics=improved)
                     if config.artifacts.hf_model_repo_id:
@@ -696,8 +703,8 @@ def run_training(config: ExperimentConfig) -> Path:
                 event_logger.close()
             if json_logger is not None:
                 json_logger.close()
-            if wandb_run:
-                wandb_run.finish(exit_code=0 if state == "completed" else 1)
+            if wandb_monitor:
+                wandb_monitor.finish(exit_code=0 if state == "completed" else 1)
         for sig, handler in previous_handlers.items():
             signal.signal(sig, handler)
         teardown_distributed()
