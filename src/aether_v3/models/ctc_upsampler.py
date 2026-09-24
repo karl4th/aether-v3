@@ -25,6 +25,7 @@ import torch.nn as nn
 
 from aether_v3.config import CTCConfig
 from aether_v3.models.aether_speech import TransformerBlock
+from aether_v3.models.aether_speech import AttentionCache
 from aether_v3.models.rope import build_rope_cache
 
 
@@ -38,13 +39,16 @@ class _UpsamplerBlockConfig:
     dropout: float
 
 
+@dataclasses.dataclass(frozen=True)
+class CTCUpsamplerStreamingState:
+    layer_caches: tuple[AttentionCache | None, ...]
+    steps_seen: int = 0
+
+
 class CTCUpsampler(nn.Module):
     def __init__(self, hidden_size: int, cfg: CTCConfig) -> None:
         super().__init__()
-        if cfg.lookahead_frames < 0:
-            raise ValueError("lookahead_frames must be non-negative")
         self.upsample_factor = cfg.upsample_factor
-        self.lookahead_frames = cfg.lookahead_frames
         self.proj = nn.Linear(hidden_size, hidden_size * cfg.upsample_factor)
         # One learned embedding per subframe slot (shared across all
         # timesteps) so the four positions produced from a single 80ms
@@ -83,11 +87,40 @@ class CTCUpsampler(nn.Module):
             up_mask = attention_mask.unsqueeze(-1).expand(b, t, u).reshape(b, t * u)
 
         cos, sin = build_rope_cache(t * u, self.head_dim, self.rope_theta, x.device, x.dtype)
-        # Convert bounded Mimi-frame lookahead to the upsampled time axis.
-        # This remains streamable by delaying emission until those frames
-        # arrive; unlike bidirectional attention it never sees the rest of
-        # the utterance.
-        right_context = self.lookahead_frames * u
         for block in self.blocks:
-            x, _ = block(x, cos, sin, up_mask, causal=True, right_context=right_context)
+            x, _ = block(x, cos, sin, up_mask, causal=True)
         return self.final_norm(x)
+
+    def init_streaming_state(self) -> CTCUpsamplerStreamingState:
+        return CTCUpsamplerStreamingState(layer_caches=(None,) * len(self.blocks))
+
+    def forward_chunk(
+        self,
+        hidden_states: torch.Tensor,
+        state: CTCUpsamplerStreamingState | None = None,
+    ) -> tuple[torch.Tensor, CTCUpsamplerStreamingState]:
+        if hidden_states.ndim != 3 or hidden_states.shape[1] == 0:
+            raise ValueError("hidden_states must have shape (batch, nonzero_time, hidden)")
+        state = state or self.init_streaming_state()
+        b, t, h = hidden_states.shape
+        u = self.upsample_factor
+        x = self.proj(hidden_states).view(b, t, u, h)
+        x = (x + self.subframe_pos_emb.view(1, 1, u, h)).reshape(b, t * u, h)
+        cos, sin = build_rope_cache(
+            t * u,
+            self.head_dim,
+            self.rope_theta,
+            x.device,
+            x.dtype,
+            position_offset=state.steps_seen,
+        )
+        next_caches: list[AttentionCache] = []
+        for block, cache in zip(self.blocks, state.layer_caches, strict=True):
+            x, next_cache = block(
+                x, cos, sin, None, causal=True, cache=cache, return_cache=True
+            )
+            assert next_cache is not None
+            next_caches.append(next_cache)
+        return self.final_norm(x), CTCUpsamplerStreamingState(
+            layer_caches=tuple(next_caches), steps_seen=state.steps_seen + t * u
+        )

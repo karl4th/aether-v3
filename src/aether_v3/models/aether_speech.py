@@ -42,6 +42,7 @@ class AetherSpeechStreamingState:
 
     layer_caches: tuple[AttentionCache | None, ...]
     frames_seen: int = 0
+    pending_codes: torch.Tensor | None = None
 
 
 class RopeSelfAttention(nn.Module):
@@ -69,6 +70,7 @@ class RopeSelfAttention(nn.Module):
         cache: AttentionCache | None = None,
         max_cache_frames: int | None = None,
         return_cache: bool = False,
+        commit_current_frames: int | None = None,
     ) -> tuple[torch.Tensor, AttentionCache | None]:
         b, t, _ = x.shape
         q = self.q_proj(x).view(b, t, self.num_heads, self.head_dim).transpose(1, 2)
@@ -119,11 +121,21 @@ class RopeSelfAttention(nn.Module):
 
         next_cache = None
         if return_cache:
-            keep = key.shape[2] if max_cache_frames is None else min(key.shape[2], max_cache_frames)
+            committed_end = key.shape[2]
+            if commit_current_frames is not None:
+                committed_end = cached_length + commit_current_frames
+            committed_key = key[:, :, :committed_end, :]
+            committed_value = value[:, :, :committed_end, :]
+            committed_mask = full_key_mask[:, :committed_end]
+            keep = (
+                committed_key.shape[2]
+                if max_cache_frames is None
+                else min(committed_key.shape[2], max_cache_frames)
+            )
             next_cache = AttentionCache(
-                key=key[:, :, -keep:, :].detach(),
-                value=value[:, :, -keep:, :].detach(),
-                key_mask=full_key_mask[:, -keep:].detach(),
+                key=committed_key[:, :, -keep:, :].detach(),
+                value=committed_value[:, :, -keep:, :].detach(),
+                key_mask=committed_mask[:, -keep:].detach(),
             )
         return self.o_proj(out), next_cache
 
@@ -160,6 +172,7 @@ class TransformerBlock(nn.Module):
         cache: AttentionCache | None = None,
         max_cache_frames: int | None = None,
         return_cache: bool = False,
+        commit_current_frames: int | None = None,
     ) -> tuple[torch.Tensor, AttentionCache | None]:
         attn_out, next_cache = self.attn(
             self.norm1(x),
@@ -171,6 +184,7 @@ class TransformerBlock(nn.Module):
             cache=cache,
             max_cache_frames=max_cache_frames,
             return_cache=return_cache,
+            commit_current_frames=commit_current_frames,
         )
         x = x + self.dropout(attn_out)
         x = x + self.dropout(self.ffn(self.norm2(x)))
@@ -182,6 +196,8 @@ class AetherSpeechEncoder(nn.Module):
         super().__init__()
         if cfg.streaming_left_context_frames <= 0:
             raise ValueError("streaming_left_context_frames must be positive")
+        if cfg.lookahead_frames < 0:
+            raise ValueError("lookahead_frames must be non-negative")
         self.cfg = cfg
         self.semantic_embedding = nn.Embedding(cfg.semantic_vocab_size, cfg.hidden_size)
         self.blocks = nn.ModuleList([TransformerBlock(cfg) for _ in range(cfg.num_layers)])
@@ -201,10 +217,13 @@ class AetherSpeechEncoder(nn.Module):
     ) -> tuple[torch.Tensor | None, AetherSpeechStreamingState]:
         """Finish a stream and reset its state.
 
-        Strictly causal AetherSpeech buffers no future-dependent frames, so
-        there is nothing delayed to emit.
+        Emit the remaining tail with whatever future context is available and
+        reset the stream.
         """
-        return None, self.reset_stream()
+        if state.pending_codes is None or state.pending_codes.shape[1] == 0:
+            return None, self.reset_stream()
+        output, _ = self._encode_streaming(state.pending_codes[:, :0], state, flush=True)
+        return output, self.reset_stream()
 
     def forward_chunk(
         self,
@@ -217,7 +236,73 @@ class AetherSpeechEncoder(nn.Module):
             raise ValueError(
                 "streaming batches cannot contain padded frames; keep one state per live stream"
             )
-        return self._encode_chunk(semantic_codes, state, attention_mask, return_cache=True)
+        return self._encode_streaming(semantic_codes, state, flush=False)
+
+    def _encode_streaming(
+        self,
+        semantic_codes: torch.Tensor,
+        state: AetherSpeechStreamingState | None,
+        *,
+        flush: bool,
+    ) -> tuple[torch.Tensor, AetherSpeechStreamingState]:
+        state = state or self.init_streaming_state()
+        pending = state.pending_codes
+        combined = semantic_codes if pending is None else torch.cat((pending, semantic_codes), dim=1)
+        lookahead = self.cfg.lookahead_frames
+        emit_frames = combined.shape[1] if flush else max(0, combined.shape[1] - lookahead)
+        if emit_frames == 0:
+            empty = self.semantic_embedding.weight.new_empty(
+                semantic_codes.shape[0], 0, self.cfg.hidden_size
+            )
+            return empty, dataclasses.replace(state, pending_codes=combined.detach())
+
+        _, t = combined.shape
+        x = self.semantic_embedding(combined)
+        cos, sin = build_rope_cache(
+            t,
+            self.head_dim,
+            self.cfg.rope_theta,
+            x.device,
+            x.dtype,
+            position_offset=state.frames_seen,
+        )
+        next_caches: list[AttentionCache] = []
+        first, first_cache = self.blocks[0](
+            x,
+            cos,
+            sin,
+            None,
+            causal=True,
+            right_context=lookahead,
+            cache=state.layer_caches[0],
+            max_cache_frames=self.cfg.streaming_left_context_frames,
+            return_cache=True,
+            commit_current_frames=emit_frames,
+        )
+        assert first_cache is not None
+        next_caches.append(first_cache)
+        x = first[:, :emit_frames]
+        mature_cos, mature_sin = cos[:emit_frames], sin[:emit_frames]
+        for block, cache in zip(self.blocks[1:], state.layer_caches[1:], strict=True):
+            x, next_cache = block(
+                x,
+                mature_cos,
+                mature_sin,
+                None,
+                causal=True,
+                cache=cache,
+                max_cache_frames=self.cfg.streaming_left_context_frames,
+                return_cache=True,
+            )
+            assert next_cache is not None
+            next_caches.append(next_cache)
+        output = self.final_norm(x)
+        next_state = AetherSpeechStreamingState(
+            layer_caches=tuple(next_caches),
+            frames_seen=state.frames_seen + emit_frames,
+            pending_codes=combined[:, emit_frames:].detach(),
+        )
+        return output, next_state
 
     def _encode_chunk(
         self,
@@ -249,13 +334,16 @@ class AetherSpeechEncoder(nn.Module):
             position_offset=state.frames_seen,
         )
         next_caches: list[AttentionCache] = []
-        for block, cache in zip(self.blocks, state.layer_caches, strict=True):
+        for block_index, (block, cache) in enumerate(
+            zip(self.blocks, state.layer_caches, strict=True)
+        ):
             x, next_cache = block(
                 x,
                 cos,
                 sin,
                 attention_mask,
                 causal=True,
+                right_context=self.cfg.lookahead_frames if block_index == 0 else 0,
                 cache=cache,
                 max_cache_frames=self.cfg.streaming_left_context_frames,
                 return_cache=return_cache,

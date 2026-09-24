@@ -16,8 +16,10 @@ import torch.nn as nn
 
 from aether_v3.config import AetherSpeechConfig, CTCConfig, SemanticPredictionConfig
 from aether_v3.models.aether_speech import AetherSpeechEncoder
+from aether_v3.models.aether_speech import AetherSpeechStreamingState
 from aether_v3.models.ctc_head import CTCHead
 from aether_v3.models.ctc_upsampler import CTCUpsampler
+from aether_v3.models.ctc_upsampler import CTCUpsamplerStreamingState
 from aether_v3.models.semantic_prediction import SemanticPredictionHeads
 
 
@@ -46,6 +48,32 @@ class AetherCTCModel(nn.Module):
         # Read by train_ctc.py to scale input_lengths (computed at the raw
         # 12.5Hz Mimi rate) up to match this model's upsampled CTC output.
         self.upsample_factor = ctc_cfg.upsample_factor
+
+    def forward_chunk(
+        self,
+        semantic_codes: torch.Tensor,
+        encoder_state: AetherSpeechStreamingState | None = None,
+        upsampler_state: CTCUpsamplerStreamingState | None = None,
+    ) -> tuple[torch.Tensor, AetherSpeechStreamingState, CTCUpsamplerStreamingState | None]:
+        hidden, encoder_state = self.encoder.forward_chunk(semantic_codes, encoder_state)
+        if hidden.shape[1] == 0:
+            empty = self.ctc_head.proj.weight.new_empty(
+                hidden.shape[0], 0, self.ctc_head.proj.out_features
+            )
+            return empty, encoder_state, upsampler_state
+        upsampled, upsampler_state = self.upsampler.forward_chunk(hidden, upsampler_state)
+        return self.ctc_head(upsampled), encoder_state, upsampler_state
+
+    def flush_stream(
+        self,
+        encoder_state: AetherSpeechStreamingState,
+        upsampler_state: CTCUpsamplerStreamingState | None,
+    ) -> tuple[torch.Tensor | None, AetherSpeechStreamingState, CTCUpsamplerStreamingState | None]:
+        hidden, encoder_state = self.encoder.flush_stream(encoder_state)
+        if hidden is None or hidden.shape[1] == 0:
+            return None, encoder_state, upsampler_state
+        upsampled, upsampler_state = self.upsampler.forward_chunk(hidden, upsampler_state)
+        return self.ctc_head(upsampled), encoder_state, upsampler_state
 
     def forward(
         self,

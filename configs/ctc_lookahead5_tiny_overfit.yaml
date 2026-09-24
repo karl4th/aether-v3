@@ -1,7 +1,7 @@
 # Memorization gate for the exact five-frame-lookahead Stage 1 architecture.
 # Train and validation intentionally use the same deterministic 256 rows.
 
-ctc:
+aether_speech:
   lookahead_frames: 5
 
 semantic_prediction:

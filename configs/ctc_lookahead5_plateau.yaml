@@ -1,6 +1,6 @@
 # Five-frame lookahead with validation-WER-driven LR reductions.
 
-ctc:
+aether_speech:
   lookahead_frames: 5
 
 semantic_prediction:

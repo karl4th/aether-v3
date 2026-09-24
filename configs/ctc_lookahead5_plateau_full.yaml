@@ -1,6 +1,6 @@
 # Full single-A40 Stage 1 run with five-frame lookahead and validation-driven LR.
 
-ctc:
+aether_speech:
   lookahead_frames: 5
 
 semantic_prediction:

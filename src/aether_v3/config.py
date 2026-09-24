@@ -35,6 +35,10 @@ class AetherSpeechConfig:
     # so 256 frames retain roughly 20 seconds of history while keeping KV
     # memory and per-chunk attention cost independent of conversation length.
     streaming_left_context_frames: int = 256
+    # Total encoder future-context budget. Only the first encoder block may
+    # consume it; every later block is strictly causal, so depth cannot expand
+    # the receptive field beyond this value.
+    lookahead_frames: int = 0
 
 
 @dataclasses.dataclass
@@ -57,9 +61,6 @@ class CTCConfig:
     upsampler_ffn_size: int = 3072
     upsampler_dropout: float = 0.1
     upsampler_rope_theta: float = 10000.0
-    # Bounded acoustic lookahead at Mimi's native 12.5 Hz rate. Five
-    # frames add about 400 ms of algorithmic latency; zero is strict causal.
-    lookahead_frames: int = 0
 
 
 @dataclasses.dataclass

@@ -81,8 +81,9 @@ def test_ctc_lookahead_is_bounded_to_configured_semantic_frames():
         num_heads=2,
         ffn_size=16,
         dropout=0.0,
+        lookahead_frames=2,
     )
-    model = AetherCTCModel(speech_cfg, _tiny_ctc_cfg(lookahead_frames=2)).eval()
+    model = AetherCTCModel(speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)).eval()
     first = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]])
     second = first.clone()
     second[:, 7] = 9
@@ -100,6 +101,75 @@ def test_ctc_lookahead_is_bounded_to_configured_semantic_frames():
         atol=1e-6,
         rtol=1e-6,
     )
+
+
+def test_total_lookahead_does_not_compound_across_depth():
+    speech_cfg = AetherSpeechConfig(
+        semantic_vocab_size=32,
+        hidden_size=8,
+        num_layers=3,
+        num_heads=2,
+        ffn_size=16,
+        dropout=0.0,
+        lookahead_frames=2,
+    )
+    model = AetherCTCModel(
+        speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)
+    ).eval()
+    original = torch.tensor([[1, 2, 3, 4, 5, 6]])
+    mask = torch.ones_like(original, dtype=torch.bool)
+
+    with torch.no_grad():
+        baseline = model(original, mask)
+        at_budget = original.clone()
+        at_budget[:, 2] = 7
+        within = model(at_budget, mask)
+        beyond_budget = original.clone()
+        beyond_budget[:, 3] = 8
+        beyond = model(beyond_budget, mask)
+
+    first_frame = model.upsample_factor
+    assert not torch.allclose(baseline[:, :first_frame], within[:, :first_frame])
+    torch.testing.assert_close(
+        baseline[:, :first_frame], beyond[:, :first_frame], atol=1e-6, rtol=1e-6
+    )
+
+
+def test_full_ctc_path_matches_chunked_streaming_with_lookahead():
+    speech_cfg = AetherSpeechConfig(
+        semantic_vocab_size=32,
+        hidden_size=8,
+        num_layers=3,
+        num_heads=2,
+        ffn_size=16,
+        dropout=0.0,
+        streaming_left_context_frames=64,
+        lookahead_frames=2,
+    )
+    model = AetherCTCModel(
+        speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)
+    ).eval()
+    codes = torch.randint(0, speech_cfg.semantic_vocab_size, (1, 11))
+    mask = torch.ones_like(codes, dtype=torch.bool)
+
+    with torch.no_grad():
+        full = model(codes, mask)
+        encoder_state = None
+        upsampler_state = None
+        pieces = []
+        start = 0
+        for size in (1, 3, 2, 5):
+            logits, encoder_state, upsampler_state = model.forward_chunk(
+                codes[:, start : start + size], encoder_state, upsampler_state
+            )
+            pieces.append(logits)
+            start += size
+        assert encoder_state is not None
+        tail, _, _ = model.flush_stream(encoder_state, upsampler_state)
+        assert tail is not None
+        pieces.append(tail)
+
+    torch.testing.assert_close(full, torch.cat(pieces, dim=1), atol=1e-5, rtol=1e-5)
 
 
 def test_joint_objective_backpropagates_into_encoder_and_semantic_heads():

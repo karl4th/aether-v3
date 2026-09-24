@@ -34,7 +34,6 @@ ctc:
   upsampler_ffn_size: 3072
   upsampler_dropout: 0.1
   upsampler_rope_theta: 10000.0
-  lookahead_frames: 0
 
 semantic_prediction:
   enabled: false
