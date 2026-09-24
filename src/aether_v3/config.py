@@ -57,6 +57,9 @@ class CTCConfig:
     upsampler_ffn_size: int = 3072
     upsampler_dropout: float = 0.1
     upsampler_rope_theta: float = 10000.0
+    # Bounded acoustic lookahead at Mimi's native 12.5 Hz rate. Five
+    # frames add about 400 ms of algorithmic latency; zero is strict causal.
+    lookahead_frames: int = 0
 
 
 @dataclasses.dataclass

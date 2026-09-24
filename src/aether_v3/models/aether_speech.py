@@ -65,6 +65,7 @@ class RopeSelfAttention(nn.Module):
         key_padding_mask: torch.Tensor | None,
         *,
         causal: bool = False,
+        right_context: int = 0,
         cache: AttentionCache | None = None,
         max_cache_frames: int | None = None,
         return_cache: bool = False,
@@ -102,7 +103,7 @@ class RopeSelfAttention(nn.Module):
         if causal:
             query_index = torch.arange(t, device=x.device)[:, None] + cached_length
             key_index = torch.arange(key.shape[2], device=x.device)[None, :]
-            causal_mask = key_index <= query_index
+            causal_mask = key_index <= query_index + right_context
             if max_cache_frames is not None:
                 causal_mask &= key_index > query_index - max_cache_frames
             attn_bias.masked_fill_(~causal_mask[None, None, :, :], float("-inf"))
@@ -155,6 +156,7 @@ class TransformerBlock(nn.Module):
         key_padding_mask: torch.Tensor | None,
         *,
         causal: bool = False,
+        right_context: int = 0,
         cache: AttentionCache | None = None,
         max_cache_frames: int | None = None,
         return_cache: bool = False,
@@ -165,6 +167,7 @@ class TransformerBlock(nn.Module):
             sin,
             key_padding_mask,
             causal=causal,
+            right_context=right_context,
             cache=cache,
             max_cache_frames=max_cache_frames,
             return_cache=return_cache,

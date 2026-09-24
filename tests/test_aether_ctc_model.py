@@ -73,6 +73,35 @@ def test_ctc_logits_do_not_depend_on_future_semantic_frames():
     )
 
 
+def test_ctc_lookahead_is_bounded_to_configured_semantic_frames():
+    speech_cfg = AetherSpeechConfig(
+        semantic_vocab_size=32,
+        hidden_size=8,
+        num_layers=1,
+        num_heads=2,
+        ffn_size=16,
+        dropout=0.0,
+    )
+    model = AetherCTCModel(speech_cfg, _tiny_ctc_cfg(lookahead_frames=2)).eval()
+    first = torch.tensor([[1, 2, 3, 4, 5, 6, 7, 8]])
+    second = first.clone()
+    second[:, 7] = 9
+    mask = torch.ones_like(first, dtype=torch.bool)
+
+    with torch.no_grad():
+        first_logits = model(first, mask)
+        second_logits = model(second, mask)
+
+    # Frame zero may see only through semantic frame two. A change in frame
+    # seven must therefore leave all of frame zero's subframes unchanged.
+    torch.testing.assert_close(
+        first_logits[:, : model.upsample_factor],
+        second_logits[:, : model.upsample_factor],
+        atol=1e-6,
+        rtol=1e-6,
+    )
+
+
 def test_joint_objective_backpropagates_into_encoder_and_semantic_heads():
     speech_cfg = AetherSpeechConfig(
         semantic_vocab_size=16,

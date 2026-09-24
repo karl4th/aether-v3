@@ -41,7 +41,10 @@ class _UpsamplerBlockConfig:
 class CTCUpsampler(nn.Module):
     def __init__(self, hidden_size: int, cfg: CTCConfig) -> None:
         super().__init__()
+        if cfg.lookahead_frames < 0:
+            raise ValueError("lookahead_frames must be non-negative")
         self.upsample_factor = cfg.upsample_factor
+        self.lookahead_frames = cfg.lookahead_frames
         self.proj = nn.Linear(hidden_size, hidden_size * cfg.upsample_factor)
         # One learned embedding per subframe slot (shared across all
         # timesteps) so the four positions produced from a single 80ms
@@ -80,9 +83,11 @@ class CTCUpsampler(nn.Module):
             up_mask = attention_mask.unsqueeze(-1).expand(b, t, u).reshape(b, t * u)
 
         cos, sin = build_rope_cache(t * u, self.head_dim, self.rope_theta, x.device, x.dtype)
-        # The upsampler is a training-only CTC branch, but its gradients
-        # shape the production encoder. Future attention here would let the
-        # Stage 1 objective use information unavailable to online inference.
+        # Convert bounded Mimi-frame lookahead to the upsampled time axis.
+        # This remains streamable by delaying emission until those frames
+        # arrive; unlike bidirectional attention it never sees the rest of
+        # the utterance.
+        right_context = self.lookahead_frames * u
         for block in self.blocks:
-            x, _ = block(x, cos, sin, up_mask, causal=True)
+            x, _ = block(x, cos, sin, up_mask, causal=True, right_context=right_context)
         return self.final_norm(x)

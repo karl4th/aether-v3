@@ -1,0 +1,57 @@
+# Bounded five-frame (~400 ms) lookahead experiment on the real Stage 1 data.
+
+ctc:
+  lookahead_frames: 5
+
+semantic_prediction:
+  enabled: false
+  weight: 0.0
+
+data:
+  backend: hf_parquet
+  dataset_id: manifestro/stage1_aether
+  dataset_revision: 4bb733b62abd021c4a153ff5196682912933588e
+  train_split: train
+  validation_split: validation
+  test_split: test
+  cache_dir: /workspace/aether-stage1/data_cache/stage1_aether
+  max_semantic_frames_per_batch: 16384
+  length_bucket_size: 512
+
+train:
+  runs_dir: /workspace/aether-stage1/runs
+  run_name: stage1-a40-lookahead5-smoke
+  batch_size: 32
+  grad_accum_steps: 1
+  max_steps: 8000
+  warmup_steps: 500
+  lr: 3.0e-4
+  min_lr_ratio: 0.1
+  weight_decay: 0.01
+  adam_beta1: 0.9
+  adam_beta2: 0.98
+  grad_clip_norm: 1.0
+  eval_interval: 1000
+  save_interval: 1000
+  log_interval: 50
+  num_workers: 4
+  seed: 1337
+  amp_dtype: bfloat16
+  wandb_project: manifestro-aether-stage1
+  wandb_group: stage1-lookahead5-smoke
+  wandb_tags: [stage1, lookahead5, smoke, loquacious]
+  wandb_required: true
+  wandb_log_examples: true
+  init_encoder_from: null
+  resume_run_from: null
+  encoder_lr_multiplier: 1.0
+  use_fused_adamw: true
+  show_progress: true
+
+artifacts:
+  google_drive_folder_id: null
+  hf_model_repo_id: null
+  hf_private: true
+  sync_on_interrupt: true
+  sync_on_completion: true
+  hf_publish_selections: []
