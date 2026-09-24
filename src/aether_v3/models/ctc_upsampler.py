@@ -45,7 +45,9 @@ class CTCUpsamplerStreamingState:
 
 
 class CTCUpsampler(nn.Module):
-    def __init__(self, hidden_size: int, cfg: CTCConfig) -> None:
+    def __init__(
+        self, hidden_size: int, cfg: CTCConfig, max_cache_frames: int | None = None
+    ) -> None:
         super().__init__()
         self.upsample_factor = cfg.upsample_factor
         self.proj = nn.Linear(hidden_size, hidden_size * cfg.upsample_factor)
@@ -65,6 +67,7 @@ class CTCUpsampler(nn.Module):
         self.final_norm = nn.LayerNorm(hidden_size)
         self.rope_theta = cfg.upsampler_rope_theta
         self.head_dim = hidden_size // cfg.upsampler_num_heads
+        self.max_cache_frames = max_cache_frames
 
     def forward(
         self, hidden_states: torch.Tensor, attention_mask: torch.Tensor | None
@@ -87,7 +90,14 @@ class CTCUpsampler(nn.Module):
 
         cos, sin = build_rope_cache(t * u, self.head_dim, self.rope_theta, x.device, x.dtype)
         for block in self.blocks:
-            x, _ = block(x, cos, sin, up_mask, causal=True)
+            x, _ = block(
+                x,
+                cos,
+                sin,
+                up_mask,
+                causal=True,
+                max_cache_frames=self.max_cache_frames,
+            )
         return self.final_norm(x)
 
     def init_streaming_state(self) -> CTCUpsamplerStreamingState:
@@ -115,7 +125,16 @@ class CTCUpsampler(nn.Module):
         )
         next_caches: list[AttentionCache] = []
         for block, cache in zip(self.blocks, state.layer_caches, strict=True):
-            x, next_cache = block(x, cos, sin, None, causal=True, cache=cache, return_cache=True)
+            x, next_cache = block(
+                x,
+                cos,
+                sin,
+                None,
+                causal=True,
+                cache=cache,
+                max_cache_frames=self.max_cache_frames,
+                return_cache=True,
+            )
             assert next_cache is not None
             next_caches.append(next_cache)
         return self.final_norm(x), CTCUpsamplerStreamingState(

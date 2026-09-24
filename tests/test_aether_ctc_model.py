@@ -1,5 +1,6 @@
 from typing import Any
 
+import pytest
 import torch
 
 from aether_v3.config import AetherSpeechConfig, CTCConfig
@@ -21,6 +22,29 @@ def _tiny_ctc_cfg(**overrides) -> CTCConfig:
     )
     defaults.update(overrides)
     return CTCConfig(**defaults)
+
+
+def _stream_logits(
+    model: AetherCTCModel, codes: torch.Tensor, chunk_sizes: list[int]
+) -> torch.Tensor:
+    encoder_state = None
+    upsampler_state = None
+    pieces = []
+    start = 0
+    chunk_index = 0
+    while start < codes.shape[1]:
+        size = chunk_sizes[chunk_index % len(chunk_sizes)]
+        logits, encoder_state, upsampler_state = model.forward_chunk(
+            codes[:, start : start + size], encoder_state, upsampler_state
+        )
+        pieces.append(logits)
+        start += size
+        chunk_index += 1
+    assert encoder_state is not None
+    tail, _, _ = model.flush_stream(encoder_state, upsampler_state)
+    if tail is not None:
+        pieces.append(tail)
+    return torch.cat(pieces, dim=1)
 
 
 def test_end_to_end_forward_and_backward():
@@ -166,6 +190,172 @@ def test_full_ctc_path_matches_chunked_streaming_with_lookahead():
         pieces.append(tail)
 
     torch.testing.assert_close(full, torch.cat(pieces, dim=1), atol=1e-5, rtol=1e-5)
+
+
+def test_randomized_causal_dependency_is_exactly_bounded_to_five_frames():
+    torch.manual_seed(20260925)
+    speech_cfg = AetherSpeechConfig(
+        semantic_vocab_size=64,
+        hidden_size=16,
+        num_layers=4,
+        num_heads=4,
+        ffn_size=32,
+        dropout=0.0,
+        lookahead_frames=5,
+    )
+    model = AetherCTCModel(speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)).eval()
+
+    with torch.no_grad():
+        for _ in range(32):
+            length = int(torch.randint(8, 48, ()).item())
+            timestep = int(torch.randint(0, length - speech_cfg.lookahead_frames - 1, ()).item())
+            original = torch.randint(0, speech_cfg.semantic_vocab_size, (1, length))
+            changed = original.clone()
+            suffix_start = timestep + speech_cfg.lookahead_frames + 1
+            changed[:, suffix_start:] = (
+                changed[:, suffix_start:]
+                + torch.randint(
+                    1, speech_cfg.semantic_vocab_size, changed[:, suffix_start:].shape
+                )
+            ) % speech_cfg.semantic_vocab_size
+            mask = torch.ones_like(original, dtype=torch.bool)
+            baseline = model(original, mask)
+            perturbed = model(changed, mask)
+            output_end = (timestep + 1) * model.upsample_factor
+            torch.testing.assert_close(
+                baseline[:, :output_end], perturbed[:, :output_end], atol=1e-6, rtol=1e-6
+            )
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 3, 5, 7, 16, 32])
+def test_streaming_is_invariant_to_fixed_chunk_size(chunk_size: int):
+    torch.manual_seed(11)
+    speech_cfg = AetherSpeechConfig(
+        semantic_vocab_size=64,
+        hidden_size=16,
+        num_layers=3,
+        num_heads=4,
+        ffn_size=32,
+        dropout=0.0,
+        streaming_left_context_frames=64,
+        lookahead_frames=5,
+    )
+    model = AetherCTCModel(speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)).eval()
+    codes = torch.randint(0, speech_cfg.semantic_vocab_size, (1, 73))
+    with torch.no_grad():
+        full = model(codes, torch.ones_like(codes, dtype=torch.bool))
+        streamed = _stream_logits(model, codes, [chunk_size])
+    torch.testing.assert_close(full, streamed, atol=1e-5, rtol=1e-5)
+
+
+def test_streaming_is_invariant_to_random_non_aligned_chunks():
+    torch.manual_seed(17)
+    speech_cfg = AetherSpeechConfig(
+        semantic_vocab_size=64,
+        hidden_size=16,
+        num_layers=3,
+        num_heads=4,
+        ffn_size=32,
+        dropout=0.0,
+        streaming_left_context_frames=64,
+        lookahead_frames=5,
+    )
+    model = AetherCTCModel(speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)).eval()
+    codes = torch.randint(0, speech_cfg.semantic_vocab_size, (1, 97))
+    random_sizes = torch.randint(1, 18, (20,)).tolist()
+    with torch.no_grad():
+        full = model(codes, torch.ones_like(codes, dtype=torch.bool))
+        streamed = _stream_logits(model, codes, random_sizes)
+    torch.testing.assert_close(full, streamed, atol=1e-5, rtol=1e-5)
+
+
+def test_variable_length_padding_does_not_change_valid_logits():
+    torch.manual_seed(23)
+    speech_cfg = AetherSpeechConfig(
+        semantic_vocab_size=64,
+        hidden_size=16,
+        num_layers=3,
+        num_heads=4,
+        ffn_size=32,
+        dropout=0.0,
+        lookahead_frames=5,
+    )
+    model = AetherCTCModel(speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)).eval()
+    lengths = [25, 88, 238, 500]  # Approximately 2s, 7s, 19s and 40s at 12.5Hz.
+    batch = torch.zeros(len(lengths), max(lengths), dtype=torch.long)
+    mask = torch.zeros_like(batch, dtype=torch.bool)
+    for index, length in enumerate(lengths):
+        batch[index, :length] = torch.randint(0, speech_cfg.semantic_vocab_size, (length,))
+        mask[index, :length] = True
+
+    with torch.no_grad():
+        batched = model(batch, mask)
+        for index, length in enumerate(lengths):
+            single_codes = batch[index : index + 1, :length]
+            single = model(single_codes, torch.ones_like(single_codes, dtype=torch.bool))
+            torch.testing.assert_close(
+                batched[index : index + 1, : length * model.upsample_factor],
+                single,
+                atol=1e-5,
+                rtol=1e-5,
+            )
+
+
+def test_long_stream_keeps_cache_bounded_and_outputs_finite():
+    torch.manual_seed(29)
+    speech_cfg = AetherSpeechConfig(
+        semantic_vocab_size=64,
+        hidden_size=8,
+        num_layers=3,
+        num_heads=2,
+        ffn_size=16,
+        dropout=0.0,
+        streaming_left_context_frames=32,
+        lookahead_frames=5,
+    )
+    model = AetherCTCModel(speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)).eval()
+    # 7,500 Mimi frames represent ten minutes at 12.5Hz.
+    codes = torch.randint(0, speech_cfg.semantic_vocab_size, (1, 7_500))
+    encoder_state = None
+    upsampler_state = None
+    with torch.no_grad():
+        for start in range(0, codes.shape[1], 32):
+            logits, encoder_state, upsampler_state = model.forward_chunk(
+                codes[:, start : start + 32], encoder_state, upsampler_state
+            )
+            assert torch.isfinite(logits).all()
+            for cache in encoder_state.layer_caches:
+                assert cache is not None
+                assert cache.key.shape[2] <= speech_cfg.streaming_left_context_frames
+            if upsampler_state is not None:
+                for cache in upsampler_state.layer_caches:
+                    assert cache is not None
+                    assert (
+                        cache.key.shape[2]
+                        <= speech_cfg.streaming_left_context_frames * model.upsample_factor
+                    )
+
+
+def test_reset_prevents_state_from_leaking_between_sessions():
+    torch.manual_seed(31)
+    speech_cfg = AetherSpeechConfig(
+        semantic_vocab_size=64,
+        hidden_size=16,
+        num_layers=3,
+        num_heads=4,
+        ffn_size=32,
+        dropout=0.0,
+        lookahead_frames=5,
+    )
+    model = AetherCTCModel(speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)).eval()
+    first = torch.randint(0, speech_cfg.semantic_vocab_size, (1, 41))
+    second = torch.randint(0, speech_cfg.semantic_vocab_size, (1, 53))
+
+    with torch.no_grad():
+        _stream_logits(model, first, [7, 3, 5])
+        after_reset = _stream_logits(model, second, [7, 3, 5])
+        from_scratch = _stream_logits(model, second, [7, 3, 5])
+    torch.testing.assert_close(after_reset, from_scratch, atol=1e-6, rtol=1e-6)
 
 
 def test_joint_objective_backpropagates_into_encoder_and_semantic_heads():
