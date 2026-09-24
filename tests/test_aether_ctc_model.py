@@ -1,3 +1,5 @@
+from typing import Any
+
 import torch
 
 from aether_v3.config import AetherSpeechConfig, CTCConfig
@@ -8,7 +10,7 @@ from aether_v3.models.ctc_head import compute_ctc_loss
 def _tiny_ctc_cfg(**overrides) -> CTCConfig:
     # upsampler_num_heads=2 to match the tiny hidden_size=8 speech config
     # used in these tests (8 isn't divisible by the default 12 heads).
-    defaults = dict(
+    defaults: dict[str, Any] = dict(
         vocab_size=6,
         blank_id=5,
         upsample_factor=2,
@@ -41,6 +43,34 @@ def test_end_to_end_forward_and_backward():
 
     grads = [p.grad for p in model.parameters() if p.requires_grad]
     assert any(g is not None and torch.any(g != 0) for g in grads)
+
+
+def test_ctc_logits_do_not_depend_on_future_semantic_frames():
+    speech_cfg = AetherSpeechConfig(
+        semantic_vocab_size=16,
+        hidden_size=8,
+        num_layers=2,
+        num_heads=2,
+        ffn_size=16,
+        dropout=0.0,
+    )
+    model = AetherCTCModel(speech_cfg, _tiny_ctc_cfg()).eval()
+    prefix = torch.tensor([[1, 2, 3, 4]])
+    first = torch.cat((prefix, torch.tensor([[5, 6, 7, 8]])), dim=1)
+    second = torch.cat((prefix, torch.tensor([[9, 10, 11, 12]])), dim=1)
+    mask = torch.ones_like(first, dtype=torch.bool)
+
+    with torch.no_grad():
+        first_logits = model(first, mask)
+        second_logits = model(second, mask)
+
+    prefix_steps = prefix.shape[1] * model.upsample_factor
+    torch.testing.assert_close(
+        first_logits[:, :prefix_steps],
+        second_logits[:, :prefix_steps],
+        atol=1e-6,
+        rtol=1e-6,
+    )
 
 
 def test_joint_objective_backpropagates_into_encoder_and_semantic_heads():

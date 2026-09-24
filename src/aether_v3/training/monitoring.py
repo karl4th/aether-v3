@@ -47,6 +47,11 @@ class WandbMonitor:
             "eval/utterance_wer_gte_100_rate": float(metrics["utterance_wer_gte_100_rate"]),
             "eval/invalid_utf8_rate": float(metrics["invalid_utf8_rate"]),
             "eval/mean_length_ratio": float(metrics["mean_hypothesis_reference_length_ratio"]),
+            "eval/word_substitution_rate": float(metrics["word_substitution_rate"]),
+            "eval/word_deletion_rate": float(metrics["word_deletion_rate"]),
+            "eval/word_insertion_rate": float(metrics["word_insertion_rate"]),
+            "eval/under_length_hypothesis_rate": float(metrics["under_length_hypothesis_rate"]),
+            "eval/first_word_accuracy": float(metrics["first_word_accuracy"]),
             "eval/truncated_hypothesis_rate": float(metrics["truncated_hypothesis_rate"]),
             "eval/catastrophic_failure_rate": float(metrics["catastrophic_failure_rate"]),
         }

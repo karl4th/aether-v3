@@ -47,3 +47,21 @@ def test_failure_metrics_perfect_outputs_are_not_catastrophic():
     assert metrics["short_query_wer"] == 0.0
     assert metrics["catastrophic_failure_rate"] == 0.0
     assert metrics["mean_hypothesis_reference_length_ratio"] == 1.0
+    assert metrics["word_substitution_rate"] == 0.0
+    assert metrics["word_deletion_rate"] == 0.0
+    assert metrics["word_insertion_rate"] == 0.0
+    assert metrics["under_length_hypothesis_rate"] == 0.0
+    assert metrics["first_word_accuracy"] == 1.0
+
+
+def test_failure_metrics_separate_word_error_types():
+    metrics = compute_failure_metrics(
+        ["one two three four"],
+        ["one too three"],
+    )
+
+    assert metrics["word_substitution_rate"] == 0.25
+    assert metrics["word_deletion_rate"] == 0.25
+    assert metrics["word_insertion_rate"] == 0.0
+    assert metrics["under_length_hypothesis_rate"] == 1.0
+    assert metrics["first_word_accuracy"] == 1.0

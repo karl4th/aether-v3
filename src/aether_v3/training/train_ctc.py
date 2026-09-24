@@ -14,6 +14,7 @@ import contextlib
 import json
 import logging
 import math
+import random
 import signal
 import time
 from pathlib import Path
@@ -66,6 +67,7 @@ logger = logging.getLogger(__name__)
 # indistinguishable from a frozen process on a slow first few steps (CUDA
 # kernel compilation, etc).
 _EARLY_LOG_STEPS = frozenset({1, 2, 5, 10, 20})
+_EVAL_EXAMPLE_COUNT = 10
 
 
 def _amp_autocast(device: torch.device, dtype: torch.dtype):
@@ -209,6 +211,33 @@ def targets_to_texts(targets: torch.Tensor, lengths: torch.Tensor) -> list[str]:
     return texts
 
 
+def select_evaluation_examples(
+    references: list[str],
+    hypotheses: list[str],
+    *,
+    evaluation_index: int,
+    seed: int,
+    count: int = _EVAL_EXAMPLE_COUNT,
+) -> list[tuple[str, str]]:
+    """Choose a reproducible, non-repeating window for eval presentation.
+
+    A single seeded permutation is shared by every evaluation. Consecutive
+    evaluations consume consecutive windows from it, so production runs show
+    fresh examples until the validation set is exhausted instead of logging
+    the same fixed prefix every time.
+    """
+    if len(references) != len(hypotheses):
+        raise ValueError("references and hypotheses must have equal length")
+    if not references or count <= 0:
+        return []
+    indices = list(range(len(references)))
+    random.Random(seed).shuffle(indices)
+    selected_count = min(count, len(indices))
+    start = (evaluation_index * selected_count) % len(indices)
+    selected = [indices[(start + offset) % len(indices)] for offset in range(selected_count)]
+    return [(references[index], hypotheses[index]) for index in selected]
+
+
 @torch.no_grad()
 def evaluate(
     model: torch.nn.Module,
@@ -217,6 +246,8 @@ def evaluate(
     amp_dtype: torch.dtype,
     blank_id: int,
     show_progress: bool = False,
+    evaluation_index: int = 0,
+    example_seed: int = 0,
 ) -> dict:
     """Evaluates on every example in `loader` - no batch cap.
 
@@ -283,7 +314,12 @@ def evaluate(
         "semantic_loss": total_semantic_loss / max(1, n_batches),
         "wer": compute_wer(all_refs, all_hyps),
         "cer": compute_cer(all_refs, all_hyps),
-        "examples": list(zip(all_refs[:5], all_hyps[:5], strict=True)),
+        "examples": select_evaluation_examples(
+            all_refs,
+            all_hyps,
+            evaluation_index=evaluation_index,
+            seed=example_seed,
+        ),
     }
     metrics.update(
         compute_failure_metrics(
@@ -591,6 +627,8 @@ def run_training(config: ExperimentConfig) -> Path:
                         amp_dtype,
                         blank_id,
                         show_progress=config.train.show_progress,
+                        evaluation_index=step // config.train.eval_interval - 1,
+                        example_seed=config.train.seed,
                     )
                     if is_main_process()
                     else None

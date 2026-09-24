@@ -54,6 +54,21 @@ def compute_failure_metrics(
         for reference, hypothesis in zip(references, hypotheses, strict=True)
     ]
     truncated = [ratio < 0.5 for ratio in length_ratios]
+    word_alignment = jiwer.process_words(_non_empty(references), _non_empty(hypotheses))
+    reference_words = max(
+        1,
+        word_alignment.hits + word_alignment.substitutions + word_alignment.deletions,
+    )
+    under_length = [
+        len(hypothesis.split()) < len(reference.split())
+        for reference, hypothesis in zip(references, hypotheses, strict=True)
+    ]
+    first_word_correct = [
+        bool(hypothesis.split())
+        and bool(reference.split())
+        and hypothesis.split()[0] == reference.split()[0]
+        for reference, hypothesis in zip(references, hypotheses, strict=True)
+    ]
     catastrophic = [
         is_empty or is_repetition or is_invalid or is_truncated or sample_wer >= 1.0
         for is_empty, is_repetition, is_invalid, is_truncated, sample_wer in zip(
@@ -82,6 +97,11 @@ def compute_failure_metrics(
         "utterance_wer_gte_100_rate": sum(value >= 1.0 for value in utterance_wer) / count,
         "invalid_utf8_rate": sum(invalid_utf8) / count,
         "mean_hypothesis_reference_length_ratio": sum(length_ratios) / count,
+        "word_substitution_rate": word_alignment.substitutions / reference_words,
+        "word_deletion_rate": word_alignment.deletions / reference_words,
+        "word_insertion_rate": word_alignment.insertions / reference_words,
+        "under_length_hypothesis_rate": sum(under_length) / count,
+        "first_word_accuracy": sum(first_word_correct) / count,
         "truncated_hypothesis_rate": sum(truncated) / count,
         "catastrophic_failure_rate": sum(catastrophic) / count,
     }
@@ -95,6 +115,11 @@ _FAILURE_METRIC_NAMES = (
     "utterance_wer_gte_100_rate",
     "invalid_utf8_rate",
     "mean_hypothesis_reference_length_ratio",
+    "word_substitution_rate",
+    "word_deletion_rate",
+    "word_insertion_rate",
+    "under_length_hypothesis_rate",
+    "first_word_accuracy",
     "truncated_hypothesis_rate",
     "catastrophic_failure_rate",
 )

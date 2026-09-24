@@ -13,6 +13,7 @@ from aether_v3.training.train_ctc import (
     _amp_autocast,
     build_dataloader,
     evaluate,
+    select_evaluation_examples,
     targets_to_texts,
 )
 
@@ -21,6 +22,24 @@ def test_targets_to_texts_splits_concatenated_targets():
     targets = torch.tensor([ord("h"), ord("i"), ord("!")])
     lengths = torch.tensor([2, 1])
     assert targets_to_texts(targets, lengths) == ["hi", "!"]
+
+
+def test_evaluation_examples_rotate_without_repeating():
+    references = [f"reference {index}" for index in range(30)]
+    hypotheses = [f"hypothesis {index}" for index in range(30)]
+    first = select_evaluation_examples(
+        references, hypotheses, evaluation_index=0, seed=1337, count=10
+    )
+    second = select_evaluation_examples(
+        references, hypotheses, evaluation_index=1, seed=1337, count=10
+    )
+
+    assert len(first) == 10
+    assert len(second) == 10
+    assert set(first).isdisjoint(second)
+    assert first == select_evaluation_examples(
+        references, hypotheses, evaluation_index=0, seed=1337, count=10
+    )
 
 
 def test_amp_autocast_is_noop_on_cpu():
@@ -142,6 +161,11 @@ def test_evaluate_runs_end_to_end_on_tiny_model(tmp_path):
         "utterance_wer_gte_100_rate",
         "invalid_utf8_rate",
         "mean_hypothesis_reference_length_ratio",
+        "word_substitution_rate",
+        "word_deletion_rate",
+        "word_insertion_rate",
+        "under_length_hypothesis_rate",
+        "first_word_accuracy",
         "truncated_hypothesis_rate",
         "catastrophic_failure_rate",
     }

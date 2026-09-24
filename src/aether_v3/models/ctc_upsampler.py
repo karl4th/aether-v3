@@ -80,6 +80,9 @@ class CTCUpsampler(nn.Module):
             up_mask = attention_mask.unsqueeze(-1).expand(b, t, u).reshape(b, t * u)
 
         cos, sin = build_rope_cache(t * u, self.head_dim, self.rope_theta, x.device, x.dtype)
+        # The upsampler is a training-only CTC branch, but its gradients
+        # shape the production encoder. Future attention here would let the
+        # Stage 1 objective use information unavailable to online inference.
         for block in self.blocks:
-            x, _ = block(x, cos, sin, up_mask)
+            x, _ = block(x, cos, sin, up_mask, causal=True)
         return self.final_norm(x)
