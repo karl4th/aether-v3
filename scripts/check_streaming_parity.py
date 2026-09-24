@@ -64,11 +64,8 @@ def main() -> None:
             codes, target, duration = dataset[sample_index]
             codes = codes.unsqueeze(0).to(device)
             mask = torch.ones_like(codes, dtype=torch.bool)
-            with torch.autocast(
-                device_type=device.type, dtype=torch.bfloat16, enabled=device.type == "cuda"
-            ):
-                offline = model(codes, mask)
-                streaming = _stream(model, codes)
+            offline = model(codes, mask)
+            streaming = _stream(model, codes)
             max_logit_difference = max(
                 max_logit_difference,
                 float((offline.float() - streaming.float()).abs().max().item()),
@@ -93,6 +90,7 @@ def main() -> None:
         json.dumps(
             {
                 "checkpoint_step": snapshot.get("step"),
+                "dtype": "float32",
                 "samples": len(refs),
                 "hypothesis_mismatches": sum(
                     left != right for left, right in zip(offline_hyps, streaming_hyps, strict=True)
