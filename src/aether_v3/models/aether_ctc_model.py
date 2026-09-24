@@ -15,11 +15,9 @@ import torch
 import torch.nn as nn
 
 from aether_v3.config import AetherSpeechConfig, CTCConfig, SemanticPredictionConfig
-from aether_v3.models.aether_speech import AetherSpeechEncoder
-from aether_v3.models.aether_speech import AetherSpeechStreamingState
+from aether_v3.models.aether_speech import AetherSpeechEncoder, AetherSpeechStreamingState
 from aether_v3.models.ctc_head import CTCHead
-from aether_v3.models.ctc_upsampler import CTCUpsampler
-from aether_v3.models.ctc_upsampler import CTCUpsamplerStreamingState
+from aether_v3.models.ctc_upsampler import CTCUpsampler, CTCUpsamplerStreamingState
 from aether_v3.models.semantic_prediction import SemanticPredictionHeads
 
 

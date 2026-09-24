@@ -113,9 +113,7 @@ def test_total_lookahead_does_not_compound_across_depth():
         dropout=0.0,
         lookahead_frames=2,
     )
-    model = AetherCTCModel(
-        speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)
-    ).eval()
+    model = AetherCTCModel(speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)).eval()
     original = torch.tensor([[1, 2, 3, 4, 5, 6]])
     mask = torch.ones_like(original, dtype=torch.bool)
 
@@ -146,9 +144,7 @@ def test_full_ctc_path_matches_chunked_streaming_with_lookahead():
         streaming_left_context_frames=64,
         lookahead_frames=2,
     )
-    model = AetherCTCModel(
-        speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)
-    ).eval()
+    model = AetherCTCModel(speech_cfg, _tiny_ctc_cfg(upsampler_num_layers=2)).eval()
     codes = torch.randint(0, speech_cfg.semantic_vocab_size, (1, 11))
     mask = torch.ones_like(codes, dtype=torch.bool)
 

@@ -24,8 +24,7 @@ import torch
 import torch.nn as nn
 
 from aether_v3.config import CTCConfig
-from aether_v3.models.aether_speech import TransformerBlock
-from aether_v3.models.aether_speech import AttentionCache
+from aether_v3.models.aether_speech import AttentionCache, TransformerBlock
 from aether_v3.models.rope import build_rope_cache
 
 
@@ -116,9 +115,7 @@ class CTCUpsampler(nn.Module):
         )
         next_caches: list[AttentionCache] = []
         for block, cache in zip(self.blocks, state.layer_caches, strict=True):
-            x, next_cache = block(
-                x, cos, sin, None, causal=True, cache=cache, return_cache=True
-            )
+            x, next_cache = block(x, cos, sin, None, causal=True, cache=cache, return_cache=True)
             assert next_cache is not None
             next_caches.append(next_cache)
         return self.final_norm(x), CTCUpsamplerStreamingState(

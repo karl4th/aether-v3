@@ -247,7 +247,9 @@ class AetherSpeechEncoder(nn.Module):
     ) -> tuple[torch.Tensor, AetherSpeechStreamingState]:
         state = state or self.init_streaming_state()
         pending = state.pending_codes
-        combined = semantic_codes if pending is None else torch.cat((pending, semantic_codes), dim=1)
+        combined = (
+            semantic_codes if pending is None else torch.cat((pending, semantic_codes), dim=1)
+        )
         lookahead = self.cfg.lookahead_frames
         emit_frames = combined.shape[1] if flush else max(0, combined.shape[1] - lookahead)
         if emit_frames == 0:
