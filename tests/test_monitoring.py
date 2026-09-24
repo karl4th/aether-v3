@@ -84,6 +84,16 @@ def test_monitor_uses_stable_run_id_and_writes_public_metadata(tmp_path, monkeyp
     assert "secret-value" not in metadata_text
 
 
+def test_monitor_can_use_local_spool_for_network_volume(tmp_path, monkeypatch):
+    monkeypatch.setenv("WANDB_API_KEY", "secret")
+    monkeypatch.setenv("AETHER_WANDB_DIR", "/tmp/aether-wandb")
+    run = FakeRun()
+    calls = _install_fake_wandb(monkeypatch, run)
+
+    assert start_wandb_monitor(_config(), tmp_path, "run-1") is not None
+    assert calls[0]["dir"] == "/tmp/aether-wandb"
+
+
 def test_logging_failure_disables_remote_logging_without_raising(tmp_path, monkeypatch):
     monkeypatch.setenv("WANDB_API_KEY", "secret")
     run = FakeRun()

@@ -36,8 +36,8 @@ ctc:
   upsampler_rope_theta: 10000.0
 
 semantic_prediction:
-  enabled: true
-  weight: 0.25
+  enabled: false
+  weight: 0.0
   future_horizons: [1, 2, 4]
 
 data:

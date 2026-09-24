@@ -208,16 +208,15 @@ Training safety now includes:
 - explicit run states and termination reasons;
 - artifact-sync failures recorded as events instead of destroying local state.
 
-## Removal of the CTC-only objective bottleneck
+## Future-q0 auxiliary experiment (disabled for production)
 
-CTC remains useful for exact transcript recovery and WER, but it treats
+CTC is useful for exact transcript recovery and WER, but it treats
 non-transcribed structure such as breathing, laughter, hesitation, and acoustic
-events as blank. It is therefore no longer the only objective applied to
-AetherSpeech.
+events as blank. An auxiliary objective was implemented to test that concern.
 
-The training model now includes three disposable causal semantic-prediction
+The training model supports three disposable causal semantic-prediction
 heads. From every AetherSpeech state they predict the Mimi q0 token at future
-horizons of 1, 2, and 4 semantic frames. The default joint loss is:
+horizons of 1, 2, and 4 semantic frames. When enabled, the joint loss is:
 
 ```text
 L = L_CTC + 0.25 * mean(L_q0@1, L_q0@2, L_q0@4)
@@ -240,6 +239,11 @@ recover non-verbal information already discarded by q0. A separate linear-probe
 experiment on laughter, breathing, coughs, silence, and other events remains
 necessary before claiming that q0 carries those signals. Additional Mimi
 streams or a dedicated event/prosody path may still be required for AetherDuplex.
+
+The production 2,500-hour run disables this auxiliary branch and uses CTC only.
+Predicting codebook-0 from itself has no demonstrated benefit for the current
+WER target, while the 53M-parameter encoder has limited capacity. The feature is
+retained only for controlled ablations; it is not part of the active run.
 
 ## Progress and logs
 

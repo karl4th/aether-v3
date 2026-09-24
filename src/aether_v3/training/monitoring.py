@@ -98,7 +98,11 @@ def start_wandb_monitor(
         wandb_run = wandb.init(
             project=project,
             entity=config.train.wandb_entity,
-            dir=str(run_path),
+            # Some persistent/network volumes support atomic rename but not chmod,
+            # which W&B media artifacts require. Operators can keep durable model
+            # artifacts on that volume while placing W&B's transient spool on a
+            # normal local filesystem.
+            dir=os.environ.get("AETHER_WANDB_DIR", str(run_path)),
             group=config.train.wandb_group,
             tags=config.train.wandb_tags,
             id=run_id,

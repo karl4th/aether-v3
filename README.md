@@ -9,14 +9,13 @@ a frozen Qwen3-4B LM (phase 2, not implemented yet).
              -> Embedding(2048, 768)
              -> AetherSpeech: 8x causal streaming RoPE transformer blocks,
                 dim 768, heads 12, FFN 3072
-             ├-> CTC head: byte-level UTF-8 + blank
-             └-> training-only future-q0 prediction heads (1/2/4 frames)
+             └-> CTC head: byte-level UTF-8 + blank
 ```
 
-Phase 1 uses a joint objective: CTC measures exact linguistic recovery, while
-causal future-q0 prediction prevents transcript supervision from being the only
-information preserved by AetherSpeech. Both diagnostic heads are discarded for
-the production encoder.
+The production Phase 1 run uses CTC only. Future-q0 prediction remains available
+as an ablation in the codebase but is disabled: codebook-0 does not provide a
+proven benefit that justifies spending capacity and gradient budget on predicting
+it for the current WER objective.
 
 ## Setup
 
