@@ -50,7 +50,9 @@ class LoquaciousSemanticDataset(Dataset):
         )
 
 
-def load_loquacious_split(config: DataConfig, split: str) -> LoquaciousSemanticDataset:
+def load_loquacious_split(
+    config: DataConfig, split: str, *, max_samples: int | None = None
+) -> LoquaciousSemanticDataset:
     """Load one split from an immutable Hub revision using HF_TOKEN implicitly."""
     if not config.dataset_revision:
         raise ValueError("data.dataset_revision is required for hf_parquet training")
@@ -63,6 +65,10 @@ def load_loquacious_split(config: DataConfig, split: str) -> LoquaciousSemanticD
     )
     if not isinstance(dataset, HFDataset):
         raise TypeError(f"expected a map-style Dataset for split {split!r}")
+    if max_samples is not None:
+        if max_samples <= 0:
+            raise ValueError("max_samples must be positive when set")
+        dataset = dataset.select(range(min(max_samples, len(dataset))))
     return LoquaciousSemanticDataset(dataset)
 
 

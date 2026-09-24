@@ -360,8 +360,16 @@ def run_training(config: ExperimentConfig) -> Path:
     train_ds: Dataset
     val_ds: Dataset
     if config.data.backend == "hf_parquet":
-        train_ds = load_loquacious_split(config.data, config.data.train_split)
-        val_ds = load_loquacious_split(config.data, config.data.validation_split)
+        train_ds = load_loquacious_split(
+            config.data,
+            config.data.train_split,
+            max_samples=config.data.max_train_samples,
+        )
+        val_ds = load_loquacious_split(
+            config.data,
+            config.data.validation_split,
+            max_samples=config.data.max_validation_samples,
+        )
     elif config.data.backend == "local_arrow":
         cache_dir = Path(config.data.cache_dir)
         train_ds = CTCCachedDataset(cache_dir / "train")

@@ -79,6 +79,10 @@ class DataConfig:
     train_split: str = "train"
     validation_split: str = "validation"
     test_split: str = "test"
+    # Optional deterministic prefixes used by bounded diagnostics such as
+    # tiny-overfit. None preserves the complete published split.
+    max_train_samples: int | None = None
+    max_validation_samples: int | None = None
     # Legacy LibriSpeech extraction inputs. They remain available for the
     # local_arrow backend and cache-building tools, but are not used by the
     # published LoquaciousSet semantic cache.

@@ -67,3 +67,27 @@ def test_hub_loader_restricts_download_to_requested_split(monkeypatch, tmp_path)
     assert captured["data_files"] == {"validation": "validation/*.parquet"}
     assert captured["split"] == "validation"
     assert captured["revision"] == config.dataset_revision
+
+
+def test_hub_loader_selects_deterministic_bounded_prefix(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "aether_v3.data.loquacious.load_dataset", lambda *_args, **_kwargs: _dataset()
+    )
+    config = DataConfig(cache_dir=str(tmp_path))
+
+    dataset = load_loquacious_split(config, "train", max_samples=1)
+
+    assert len(dataset) == 1
+    codes, target, _seconds = dataset[0]
+    assert codes.tolist() == [1, 2, 3]
+    assert bytes(target.tolist()).decode() == "WHO ARE YOU"
+
+
+def test_hub_loader_rejects_nonpositive_sample_limit(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "aether_v3.data.loquacious.load_dataset", lambda *_args, **_kwargs: _dataset()
+    )
+    config = DataConfig(cache_dir=str(tmp_path))
+
+    with pytest.raises(ValueError, match="max_samples must be positive"):
+        load_loquacious_split(config, "train", max_samples=0)
