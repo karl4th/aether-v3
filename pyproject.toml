@@ -8,8 +8,11 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "torch>=2.4",
-    "torchaudio>=2.4",
+    # Keep the CUDA runtime compatible with RunPod's 570-series drivers.
+    # Unbounded resolution currently selects CUDA 13 wheels, which require a
+    # newer driver and make torch.cuda.is_available() false on an A40 Pod.
+    "torch==2.9.1",
+    "torchaudio==2.9.1",
     "transformers>=5.17",
     # <4.0: 4.0+ requires torchcodec (and its own ffmpeg shared libs) to
     # decode the Audio feature; pinning below that keeps decoding on
